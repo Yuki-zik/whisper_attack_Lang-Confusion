@@ -1,6 +1,5 @@
-"""
-Carlini&Wagner attack (https://arxiv.org/abs/1801.01944)
-"""
+# Carlini&Wagner attack (https://arxiv.org/abs/1801.01944)
+# 适配语音 ASR，基于 robust_speech 的 ImperceptibleASRAttack
 
 from typing import List, Optional, Tuple
 
@@ -71,6 +70,7 @@ class ASRCarliniWagnerAttack(ImperceptibleASRAttack):
         confidence: float = 0.0,
         correct_first_word: bool = False
     ):
+        # 调用父类构造：第一阶段迭代 max_iter，第二阶段禁用（max_iter_2=0）
         super(ASRCarliniWagnerAttack, self).__init__(
             asr_brain,
             eps=eps,
@@ -88,10 +88,10 @@ class ASRCarliniWagnerAttack(ImperceptibleASRAttack):
             clip_min=clip_min,
             clip_max=clip_max,
         )
-        self.reg_const = 1./const if const is not None else 0.
-        self.confidence = confidence
-        self.correct_first_word = correct_first_word
-        self.asr_brain.hparams.confidence = self.confidence
+        self.reg_const = 1./const if const is not None else 0.  # C&W 正则系数
+        self.confidence = confidence                              # 调整 logits 的置信度阈
+        self.correct_first_word = correct_first_word              # 是否修正首词
+        self.asr_brain.hparams.confidence = self.confidence       # 将参数写入 brain
         self.asr_brain.hparams.correct_first_word = self.correct_first_word
 
     def _forward_1st_stage(
@@ -105,25 +105,28 @@ class ASRCarliniWagnerAttack(ImperceptibleASRAttack):
         real_lengths: np.ndarray,
     ):
 
-        # Compute perturbed inputs
+        # 取当前 batch 的扰动并裁剪到 [-eps, eps]
         local_delta = self.global_optimal_delta[:
                                                 local_batch_size, :local_max_length]
         local_delta_rescale = torch.clamp(local_delta, -self.eps, self.eps).to(
             self.asr_brain.device
         )
         local_delta_rescale *= torch.tensor(rescale).to(self.asr_brain.device)
+        # 叠加到原始输入得到对抗音频
         adv_input = local_delta_rescale + torch.tensor(original_input).to(
             self.asr_brain.device
         )
+        # mask 去除填充位置
         masked_adv_input = adv_input * torch.tensor(input_mask).to(
             self.asr_brain.device
         )
 
-        # Compute loss and decoded output
+        # 用对抗音频替换 batch 后前向
         batch.sig = masked_adv_input, batch.sig[1]
         predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
         loss = self.asr_brain.compute_objectives(
             predictions, batch, rs.Stage.ATTACK, reduction="batchmean")
+        # 增加扰动范数正则
         loss_backward = loss.mean() + self.reg_const * torch.norm(local_delta_rescale)
         decoded_output = self.asr_brain.get_tokens(predictions)
         # print(decoded_output,batch.tokens)
@@ -138,4 +141,5 @@ class ASRCarliniWagnerAttack(ImperceptibleASRAttack):
             self.asr_brain.module_train()
         if len(loss.size()) == 0:
             loss = loss.view(1)
+        # 返回攻击损失、当前扰动等
         return loss_backward, loss, local_delta, decoded_output, masked_adv_input, local_delta_rescale

@@ -1,4 +1,6 @@
-#! /bin/bash
+#!/bin/bash
+# 高斯噪声对比实验批量脚本（参数与原版一致）
+
 DATA=test-clean-100
 python run_attack.py attack_configs/rand.yaml --data_csv_name=$DATA --model_label=tiny --root=$RSROOT --sigma=0.09 --save_audio=False --load_audio=False
 python run_attack.py attack_configs/rand.yaml --data_csv_name=$DATA --model_label=tiny.en --root=$RSROOT --sigma=0.15 --save_audio=False --load_audio=False

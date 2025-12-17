@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Lint as: python3
-"""Adversarial examples against Whisper"""
+"""Whisper 对抗样本数据集定义（HF Datasets Builder）"""
 
 
 import os
@@ -24,7 +24,7 @@ from datasets.tasks import AutomaticSpeechRecognition
 
 
 _DESCRIPTION = """\
-Adversarial examples fooling whisper models
+对抗样本集合，可使 Whisper 模型被欺骗
 """
 
 _DL_URLS = {
@@ -66,12 +66,11 @@ class AdvWhisperASRConfig(datasets.BuilderConfig):
 
     def __init__(self, **kwargs):
         """
-        Args:
-          data_dir: `string`, the path to the folder containing the files in the
-            downloaded .tar
-          citation: `string`, citation for the data set
-          url: `string`, url for information about the data set
-          **kwargs: keyword arguments forwarded to super.
+        参数:
+          data_dir: 下载后解压目录
+          citation: 数据集引用信息
+          url: 数据集相关链接
+          **kwargs: 传递给父类的其他参数
         """
         super(AdvWhisperASRConfig, self).__init__(version=datasets.Version("0.1.0", ""), **kwargs)
 
@@ -95,6 +94,7 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
     ]
 
     def _info(self):
+        """定义数据集字段/特征与任务模板"""
         return datasets.DatasetInfo(
             description=_DESCRIPTION,
             features=datasets.Features(
@@ -110,8 +110,9 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
         )
 
     def _split_generators(self, dl_manager):
+        # 下载对应配置的数据集
         archive_path = dl_manager.download(_DL_URLS[self.config.name])
-        # (Optional) In non-streaming mode, we can extract the archive locally to have actual local audio files:
+        # 非流式模式下可先解压以便本地读取 wav
         local_extracted_archive = dl_manager.extract(archive_path) if not dl_manager.is_streaming else {}
         models = [
             'whisper-tiny',
@@ -151,6 +152,7 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
         targets = [("english","en"), ("tagalog","tl"), ("serbian","sr")]
         
         if "language-" in self.config.name:
+            # 语言攻击：按目标语言-译向生成 split（及 original）
             lang = self.config.name.split("language-")[-1]
             splits = [
                 datasets.SplitGenerator(
@@ -172,6 +174,7 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
                 )
             ]
         else:
+            # 非语言攻击：按模型生成 split（及 original）
             splits = [
             datasets.SplitGenerator(
                     name=model.replace("-","."),
@@ -197,16 +200,18 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
     def _generate_examples(self, files, local_extracted_archive,path_audio):
         """Generate examples from an extracted path."""
         key = 0
-        suffix = "_nat.wav" if "original" in path_audio else "_adv.wav"
+        suffix = "_nat.wav" if "original" in path_audio else "_adv.wav"  # 根据 split 确定文件后缀
         audio_data = {}
         transcripts = []
         for t in files:
             path, f = t
             if path.endswith(".wav"):
+                # 收集符合目录与后缀的音频二进制
                 if path_audio in path and path.endswith(suffix):
-                    id_ = path.split("/")[-1][: -len(suffix)]
-                    audio_data[id_] = f.read()
+                    id_ = path.split("/")[-1][: -len(suffix)]  # 去掉后缀得到 id
+                    audio_data[id_] = f.read()                 # 缓存音频 bytes
             elif path.endswith(".csv"):
+                # 读取转写 CSV，记录 id 与文本
                 for line in f:
                     if line:
                         line = (line.decode("utf-8") if isinstance(line,bytes) else line)
@@ -214,7 +219,7 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
                         id_ = line[0]
                         transcript=line[-1]
                         transcript = transcript[:-1] if transcript[-1]=='\n' else transcript
-                        audio_file = id_+suffix
+                        audio_file = id_+suffix                      # 构造文件名
                         audio_file = (
                             os.path.join(local_extracted_archive,path_audio, audio_file)
                             if local_extracted_archive else audio_file
@@ -229,8 +234,8 @@ class AdvWhisperASR(datasets.GeneratorBasedBuilder):
         
         for transcript in transcripts:
             if transcript["id"] in audio_data:
-                audio = {"path": transcript["file"], "bytes": audio_data[transcript["id"]]}
-                yield key, {"audio": audio, **transcript}
+                audio = {"path": transcript["file"], "bytes": audio_data[transcript["id"]]}  # 组装 audio 字段
+                yield key, {"audio": audio, **transcript}                                    # 产出样本
                 key += 1
         audio_data = {}
         transcripts = []

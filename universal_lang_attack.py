@@ -1,4 +1,4 @@
-from robust_speech.adversarial.attacks.pgd import SNRPGDAttack,ASRLinfPGDAttack
+﻿from robust_speech.adversarial.attacks.pgd import SNRPGDAttack,ASRLinfPGDAttack  # PGD 攻击基类
 from sb_whisper_binding import WhisperASR
 from whisper_with_gradients import detect_language_with_gradients
 from whisper.audio import CHUNK_LENGTH, SAMPLE_RATE, N_FRAMES, HOP_LENGTH, pad_or_trim, log_mel_spectrogram
@@ -17,27 +17,28 @@ from robust_speech.adversarial.utils import (
 
 from tqdm import tqdm
 
-MAXLEN=16000*30
+MAXLEN=16000*30  # 对抗扰动最大长度（30s，16kHz）
 class UniversalWhisperLanguageAttack(TrainableAttacker,ASRLinfPGDAttack):
+    """通用语言攻击：学习一次性可迁移的扰动，促使输出目标语言 token"""
     def __init__(self,asr_brain,*args,language="es",targeted_for_language=True,nb_epochs=10,eps_item=0.001,success_every=10,univ_perturb=None,epoch_counter=None,**kwargs):
-        self.language = "<|"+language.strip("<|>")+"|>"
-        self.lang_token = torch.LongTensor(asr_brain.tokenizer.encode(self.language)).to(asr_brain.device)
-        ASRLinfPGDAttack.__init__(self,WhisperLangID(asr_brain,self.lang_token),*args,targeted=targeted_for_language,**kwargs)
+        self.language = "<|"+language.strip("<|>")+"|>"                                    # 目标语言 token 文本
+        self.lang_token = torch.LongTensor(asr_brain.tokenizer.encode(self.language)).to(asr_brain.device)  # token id
+        ASRLinfPGDAttack.__init__(self,WhisperLangID(asr_brain,self.lang_token),*args,targeted=targeted_for_language,**kwargs)  # 初始化 PGD
         self.univ_perturb = univ_perturb
         if self.univ_perturb is None:
-            self.univ_perturb = rs.adversarial.utils.TensorModule(size=(MAXLEN,))
-        self.nb_epochs=nb_epochs
-        self.eps_item=eps_item
-        self.success_every=success_every
+            self.univ_perturb = rs.adversarial.utils.TensorModule(size=(MAXLEN,))         # 若未提供则创建全局张量
+        self.nb_epochs=nb_epochs                                                          # 训练轮数
+        self.eps_item=eps_item                                                            # 单步 L_inf 限制
+        self.success_every=success_every                                                  # 评估频率
         self.epoch_counter = epoch_counter
         if self.epoch_counter is None:
-            self.epoch_counter = range(100)
+            self.epoch_counter = range(100)                                               # 默认最多 100 轮
 
     def fit(self, loader):
         return self._compute_universal_perturbation(loader)
 
     def _compute_universal_perturbation(self, loader):
-        self.univ_perturb=self.univ_perturb.to(self.asr_brain.device)
+        self.univ_perturb=self.univ_perturb.to(self.asr_brain.device)     # 将扰动搬到设备
         if self.train_mode_for_backward:
             self.asr_brain.module_train()
         else:
@@ -75,7 +76,6 @@ class UniversalWhisperLanguageAttack(TrainableAttacker,ASRLinfPGDAttack):
                     batch.sig = wav_init + delta_batch + r_batch, wav_lens
                     predictions = self.asr_brain.compute_forward(
                         batch, rs.Stage.ATTACK)
-                    # loss = 0.5 * r.norm(dim=1, p=2) - self.asr_brain.compute_objectives(predictions, batch, rs.Stage.ATTACK)
                     lang_loss = self.asr_brain.compute_objectives(
                             predictions, batch, rs.Stage.ATTACK)
                     l2_norm = r.norm(p=2).to(
@@ -144,7 +144,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker,ASRLinfPGDAttack):
                     best_success_rate = success_rate
                     self.univ_perturb.tensor.data = delta.detach()
                     self.checkpointer.save_and_keep_only()
-                    #print(
+                   #print(
                     #    f"Perturbation vector with best success rate saved. Success rate:{(100*best_success_rate):.2f}%")
         print(
             f"Training finisihed. Best success rate: {best_success_rate:.2f}%") 
@@ -185,4 +185,3 @@ class UniversalWhisperLanguageAttack(TrainableAttacker,ASRLinfPGDAttack):
         batch = batch.to(save_device)
         self.asr_brain.module_eval()
         return wav_adv.data.to(save_device)
-

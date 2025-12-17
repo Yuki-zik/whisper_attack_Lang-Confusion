@@ -1,12 +1,12 @@
-from whisper.model import Whisper
-import os
-from loss import get_loss_single_segment as get_loss_function
+﻿from whisper.model import Whisper                                  # Whisper 基类
+import os                                                          # 路径
+from loss import get_loss_single_segment as get_loss_function      # 单段损失函数
 from typing import Dict, List, Tuple, Iterable, Optional, Sequence, Union, TYPE_CHECKING
-import torch
-from whisper import _MODELS, _download, ModelDimensions, available_models
-from whisper.tokenizer import Tokenizer, get_tokenizer
+import torch                                                       # 张量
+from whisper import _MODELS, _download, ModelDimensions, available_models  # 模型下载工具
+from whisper.tokenizer import Tokenizer, get_tokenizer             # tokenizer
 from typing import Tuple
-import numpy as np
+import numpy as np                                                 # 数值
 
 def detect_language_with_gradients(model: "Whisper", mel: torch.Tensor, tokenizer: Tokenizer = None) -> Tuple[torch.Tensor, List[dict]]:
     """
@@ -103,7 +103,7 @@ def load_model_with_gradients(name: str, device: Optional[Union[str, torch.devic
     del checkpoint_file
 
     dims = ModelDimensions(**checkpoint["dims"])
-    model = WhisperWithGradient(dims) if with_grad else Whisper(dims)
+    model = WhisperWithGradient(dims) if with_grad else Whisper(dims)  # 可选带梯度版本
     model.load_state_dict(checkpoint["model_state_dict"])
 
     return model.to(device)
@@ -114,4 +114,4 @@ def load_model_with_gradients(name: str, device: Optional[Union[str, torch.devic
 class WhisperWrapper(torch.nn.Module):
     def __init__(self, name: str, **kwargs):
         super(WhisperWrapper,self).__init__()
-        self.model = load_model_with_gradients(name,**kwargs)
+        self.model = load_model_with_gradients(name,**kwargs)  # 简单包装，方便外部调用

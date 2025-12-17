@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+﻿from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Iterable, Optional, Sequence, Union, TYPE_CHECKING
 import tqdm
 import sys
@@ -18,50 +18,50 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class LossResult:
-    audio_features: Tensor
-    language: str
-    loss: Tensor
-    logits: Tensor
-    language_probs: Optional[Dict[str, float]] = None
-    tokens: List[int] = field(default_factory=list)
-    text: str = ""
-    avg_logprob: float = np.nan
-    no_speech_prob: float = np.nan
-    temperature: float = np.nan
-    compression_ratio: float = np.nan
+    audio_features: Tensor                                    # 编码特征
+    language: str                                             # 识别语言
+    loss: Tensor                                              # 损失
+    logits: Tensor                                            # logits
+    language_probs: Optional[Dict[str, float]] = None         # 语言概率
+    tokens: List[int] = field(default_factory=list)           # 预测 token
+    text: str = ""                                            # 预测文本
+    avg_logprob: float = np.nan                               # 平均对数概率
+    no_speech_prob: float = np.nan                            # 静音概率
+    temperature: float = np.nan                               # 采样温度
+    compression_ratio: float = np.nan                         # 压缩比
 
 
 class LossTask(DecodingTask):
 
     def __init__(self, model, confidence, correct_first_word, options, *args, **kwargs):
         super(LossTask, self).__init__(model, options, *args, **kwargs)
-        self.correct_first_word = correct_first_word
-        self.confidence = confidence
+        self.correct_first_word = correct_first_word         # 是否单独惩罚首词
+        self.confidence = confidence                         # 置信度调整
 
     def _loss_from_logits(self, logits, tokens, loss_fct):
-        loss = loss_fct(logits.transpose(1, 2), tokens).mean(dim=1)
-        if self.correct_first_word:
+        loss = loss_fct(logits.transpose(1, 2), tokens).mean(dim=1)   # 主损失
+        if self.correct_first_word:                                   # 可选首词校正
             corrective_first_word_loss = loss_fct(logits[:, 0], tokens[:, 0])
             loss = loss + corrective_first_word_loss/logits.size(1)
         return loss
 
     def _decoder_forward(self, audio_features: Tensor, tokens: Tensor, init_tokens_length: int):
-        self.inference.initial_token_length = tokens.shape[-1]
+        self.inference.initial_token_length = tokens.shape[-1]       # 设置初始长度
         assert audio_features.shape[0] == tokens.shape[0]
         n_batch = tokens.shape[0]
         sum_logprobs: Tensor = torch.zeros(
             n_batch, device=audio_features.device)
-        no_speech_probs = [np.nan] * n_batch
-        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-        logits = self.inference.logits(tokens[:, :-1], audio_features)
+        no_speech_probs = [np.nan] * n_batch                         # 占位
+        loss_fct = torch.nn.CrossEntropyLoss(reduction="none")       # 不求平均
+        logits = self.inference.logits(tokens[:, :-1], audio_features)  # decoder 前向
         loss = self._loss_from_logits(
             logits[:, (init_tokens_length-1):], tokens[:, init_tokens_length:], loss_fct)
         self.inference.cleanup_caching()
         if self.confidence > 0:
             mask = torch.nn.functional.one_hot(
-                tokens, num_classes=logits.size(-1))
-            mask[:, :init_tokens_length] = 0
-            logits = logits - self.confidence*mask[:, 1:]
+                tokens, num_classes=logits.size(-1))                 # 生成掩码
+            mask[:, :init_tokens_length] = 0                        # 忽略提示部分
+            logits = logits - self.confidence*mask[:, 1:]           # 调低非目标概率
         return loss, logits[:, (init_tokens_length-1):], no_speech_probs, sum_logprobs
 
     def run(self, mel: Tensor, label: Union[str, torch.Tensor]) -> List[LossResult]:
@@ -77,10 +77,10 @@ class LossTask(DecodingTask):
             label = torch.tensor([tokenizer.encode(label)])
 
         input_tokens: Tensor = torch.tensor(label).repeat(
-            n_audio, 1).to(audio_features.device)
+            n_audio, 1).to(audio_features.device)                   # 标签重复到 batch
         eos_tokens: Tensor = torch.tensor([[tokenizer.eot]]).repeat(
-            n_audio, 1).to(audio_features.device)
-        tokens = torch.cat([init_tokens, input_tokens, eos_tokens], dim=-1)
+            n_audio, 1).to(audio_features.device)                   # 终止 token
+        tokens = torch.cat([init_tokens, input_tokens, eos_tokens], dim=-1)  # 拼接输入
         # detect language if requested, overwriting the language token
         languages, language_probs = self._detect_language(
             audio_features, tokens)

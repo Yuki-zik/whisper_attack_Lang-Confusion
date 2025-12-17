@@ -1,4 +1,6 @@
-#! /bin/bash
+#!/bin/bash
+# PGD 非定向攻击批量运行示例（35dB/40dB SNR），参数与原脚本一致
+
 SEED=100
 NBITER=200
 LOAD=False

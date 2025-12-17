@@ -1,4 +1,6 @@
-#! /bin/bash
+#!/bin/bash
+# 预计算对抗样本推理示例（保持原命令）
+
 python inference.py --model tiny
 python inference.py --model tiny.en
 

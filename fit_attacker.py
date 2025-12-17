@@ -1,19 +1,6 @@
 """
-Evaluation script supporting adversarial attacks.
-Similar to the training script without the brain.fit() call, with one key difference:
-To support transferred attacks or attacks conducted on multiple models like MGAA,
-the model hparams files was decoupled from the main hparams file.
-
-hparams contains target_brain_class and target_brain_hparams_file arguments,
-which are used to load corresponding brains, modules and pretrained parameters.
-Optional source_brain_class and source_brain_hparams_file can be specified to transfer
-the adversarial perturbations. Each of them can be specified as a (nested) list, in which case
-the brain will be an EnsembleASRBrain object.
-
-Example:
-python run_attack.py attack_configs/pgd/attack.yaml\
-     --root=/path/to/data/and/results/folder\
-     --auto_mix_prec`
+对抗扰动训练脚本：与评估类似，但调用 fit_attacker 训练攻击器。
+支持迁移/多模型设置（模型 hparams 与主配置解耦）。
 """
 import os
 import sys
@@ -38,6 +25,7 @@ def read_brains(
     overrides={},
     tokenizer=None,
 ):
+    # 支持列表（构建 EnsembleASRBrain）或单个 brain
     if isinstance(brain_classes, list):
         brain_list = []
         assert len(brain_classes) == len(brain_hparams)
@@ -48,12 +36,13 @@ def read_brains(
             brain_list.append(br)
         brain = rs.adversarial.brain.EnsembleASRBrain(brain_list)
     else:
-        if isinstance(brain_hparams, str):
+        if isinstance(brain_hparams, str):  # yaml 路径则先读取
             with open(brain_hparams) as fin:
                 brain_hparams = load_hyperpyyaml(fin, overrides)
         checkpointer = (
             brain_hparams["checkpointer"] if "checkpointer" in brain_hparams else None
         )
+        # 实例化 brain，可传入攻击器
         brain = brain_classes(
             modules=brain_hparams["modules"],
             hparams=brain_hparams,
@@ -61,15 +50,16 @@ def read_brains(
             checkpointer=checkpointer,
             attacker=attacker,
         )
-        if "pretrainer" in brain_hparams:
+        if "pretrainer" in brain_hparams:  # 预训练权重
             run_on_main(brain_hparams["pretrainer"].collect_files)
             brain_hparams["pretrainer"].load_collected(
                 device=run_opts["device"])
-        brain.tokenizer = tokenizer
+        brain.tokenizer = tokenizer  # 共享 tokenizer
     return brain
 
 
 def fit(hparams_file, run_opts, overrides):
+    # 读取主 hparams
     with open(hparams_file) as fin:
         hparams = load_hyperpyyaml(fin, overrides)
 
@@ -81,13 +71,12 @@ def fit(hparams_file, run_opts, overrides):
     )
 
     if "pretrainer" in hparams:  # load parameters
-        # the tokenizer currently is loaded from the main hparams file and set
-        # in all brain classes
+        # tokenizer 从主 hparams 共享给各 brain
         run_on_main(hparams["pretrainer"].collect_files)
         hparams["pretrainer"].load_collected(device=run_opts["device"])
 
     # Dataset prep (parsing Librispeech)
-    prepare_dataset = hparams["dataset_prepare_fct"]
+    prepare_dataset = hparams["dataset_prepare_fct"]  # 数据准备函数
 
     # multi-gpu (ddp) save data preparation
     run_on_main(
@@ -107,7 +96,7 @@ def fit(hparams_file, run_opts, overrides):
     else:
         tokenizer=hparams["tokenizer"]
 
-    # here we create the datasets objects as well as tokenization and encoding
+    # 构建数据集对象与编码
     train_dataset, _, test_datasets, _, _, tokenizer = dataio_prepare(hparams)
     source_brain = None
     if "source_brain_class" in hparams:  # loading source model
@@ -118,7 +107,7 @@ def fit(hparams_file, run_opts, overrides):
             overrides={"root": hparams["root"]},
             tokenizer=tokenizer,
         )
-    attacker = hparams["attack_class"]
+    attacker = hparams["attack_class"]  # 攻击器类型
     if source_brain and attacker:
         # instanciating with the source model if there is one.
         # Otherwise, AdvASRBrain will handle instanciating the attacker with
@@ -174,7 +163,7 @@ def fit(hparams_file, run_opts, overrides):
             target=hparams["target_sentence"])
     load_audio = hparams["load_audio"] if "load_audio" in hparams else None
     save_audio_path = hparams["save_audio_path"] if hparams["save_audio"] else None
-    # Training
+    # Training：恢复 checkpoint（如存在），再训练攻击器
     checkpointer = hparams["checkpointer"]
     target_brain.attacker.checkpointer=checkpointer
     checkpointer.recover_if_possible(
@@ -187,7 +176,7 @@ def fit(hparams_file, run_opts, overrides):
 
     # saving parameters
     checkpointer.save_checkpoint()
-    # Evaluation
+    # Evaluation：训练后在测试集上评估
     for k in test_datasets.keys():  # keys are test_clean, test_other etc
         target_brain.hparams.wer_file = os.path.join(
             hparams["output_folder"], "wer_{}.txt".format(k)
