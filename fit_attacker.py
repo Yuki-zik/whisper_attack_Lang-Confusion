@@ -2,6 +2,7 @@
 对抗扰动训练脚本：与评估类似，但调用 fit_attacker 训练攻击器。
 支持迁移/多模型设置（模型 hparams 与主配置解耦）。
 """
+import csv
 import os
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import speechbrain as sb
 from hyperpyyaml import load_hyperpyyaml
 from speechbrain.utils.distributed import run_on_main
+from speechbrain.utils.depgraph import CircularDependencyError
 import robust_speech as rs
 from robust_speech.adversarial.brain import AdvASRBrain
 from robust_speech.adversarial.utils import TargetGeneratorFromFixedTargets
@@ -90,11 +92,47 @@ def fit(hparams_file, run_opts, overrides):
     )
 
     dataio_prepare = hparams["dataio_prepare_fct"]
+    # 确保测试相关的配置在 CLI 覆盖时仍保持列表格式。
+    # SpeechBrain 的 dataio_prepare 会用 zip(test_splits, test_csv) 逐项打包，
+    # 如果其中任一是字符串，会按字符迭代导致尝试打开 "/" 等非法路径。
+    # 因此在这里把字符串归一化为列表，避免再次触发 IsADirectoryError。
+    if isinstance(hparams.get("test_csv"), str):
+        hparams["test_csv"] = [hparams["test_csv"]]
+    if isinstance(hparams.get("test_splits"), str):
+        hparams["test_splits"] = [hparams["test_splits"]]
     if "tokenizer_builder" in hparams:
         tokenizer = hparams["tokenizer_builder"](hparams["tokenizer_name"])
         hparams["tokenizer"] = tokenizer
     else:
         tokenizer=hparams["tokenizer"]
+
+    # 在构建数据集前提前验证 CSV 文件，避免因缺失必备列而触发循环依赖。
+    def _collect_columns(csv_path):
+        path_obj = Path(csv_path)
+        if not path_obj.is_file():
+            raise FileNotFoundError(f"CSV 文件不存在或不可读：{csv_path}")
+        with path_obj.open(newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+        return set(header or [])
+
+    def _validate_csv_columns(csv_list):
+        expected = {"ID", "duration", "wav", "wrd"}
+        if hparams.get("targeted_for_language", False):
+            expected.add("lang")
+        for csv_path in csv_list:
+            columns = _collect_columns(csv_path)
+            missing = expected - columns
+            if missing:
+                raise ValueError(
+                    f"CSV {csv_path} 缺少必要列：{sorted(missing)}，"
+                    "请补充 wav 路径与转写文本（语言攻击还需 lang 列）。"
+                )
+
+    train_csv = hparams.get("train_csv")
+    if train_csv:
+        _validate_csv_columns([train_csv])
+    _validate_csv_columns(hparams.get("test_csv", []))
 
     # 构建数据集对象与编码
     train_dataset, _, test_datasets, _, _, tokenizer = dataio_prepare(hparams)
@@ -169,10 +207,41 @@ def fit(hparams_file, run_opts, overrides):
     checkpointer.recover_if_possible(
                 device=run_opts["device"]
             )
-    target_brain.fit_attacker(
-        train_dataset,
-        loader_kwargs=hparams["train_dataloader_opts"],
-    )
+    try:
+        target_brain.fit_attacker(
+            train_dataset,
+            loader_kwargs=hparams["train_dataloader_opts"],
+        )
+    except CircularDependencyError as exc:  # pragma: no cover - runtime safeguard
+        # 当数据管线的动态项存在环依赖（常见于 CSV 列缺失或重复自定义管线）时，SpeechBrain 会抛出该异常。
+        # 这里读取 train/test CSV 的表头，帮助定位是哪些字段缺失或命名不符。
+        csv_paths = []
+        train_csv = hparams.get("train_csv")
+        if train_csv:
+            train_csv = [train_csv] if isinstance(train_csv, str) else list(train_csv)
+            csv_paths.extend(train_csv)
+        for item in hparams.get("test_csv", []):
+            csv_paths.append(item)
+        columns = set()
+        missing_files = []
+        for csv_path in csv_paths:
+            path_obj = Path(csv_path)
+            if not path_obj.is_file():
+                missing_files.append(str(csv_path))
+                continue
+            with path_obj.open(newline="") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                if header:
+                    columns.update(header)
+        msg_parts = [
+            "检测到数据管线的循环依赖，通常由 CSV 缺少必要列（wav/wrd/lang）或自定义管线重复命名导致。",
+            f"当前已识别的 CSV 表头：{sorted(columns) if columns else '（未读到表头）'}。",
+        ]
+        if missing_files:
+            msg_parts.append(f"以下 CSV 路径不存在或不可读：{missing_files}。")
+        msg_parts.append("请检查 train_csv/test_csv 内容与 dataio_prepare 配置是否匹配（例如是否包含 wav 路径、文本/语言标签列）。")
+        raise RuntimeError("".join(msg_parts)) from exc
 
     # saving parameters
     checkpointer.save_checkpoint()
