@@ -35,8 +35,9 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         self.language = "<|" + language.strip("<|>") + "|>"  
         
         # 将 token 文本编码为对应的整数 ID，并放到设备上
-        self.lang_token = torch.LongTensor(asr_brain.tokenizer.encode(self.language)).to(asr_brain.device)
-        
+        # self.lang_token = torch.LongTensor(asr_brain.tokenizer.encode(self.language)).to(asr_brain.device)
+        # 修改为：
+        self.lang_token = torch.LongTensor(asr_brain.tokenizer.encode(self.language, allowed_special="all")).to(asr_brain.device)        
         # 2. 初始化父类 ASRLinfPGDAttack
         # WhisperLangID 是一个包装类，用于计算语言识别的 Loss
         # targeted=True 表示这是有目标攻击（一定要让模型输出特定结果，而不是只要出错就行）
