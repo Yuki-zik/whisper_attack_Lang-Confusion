@@ -3,3 +3,48 @@
 **/*.wav
 **/*.csv
 *.zip
+
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# =========================
+# Experiment outputs
+# =========================
+attacks/
+outputs/
+results/
+logs/
+checkpoints/
+ckpt/
+*.csv
+*.wav
+*.flac
+*.npy
+*.pt
+*.pth
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Temporary
+# =========================
+tmp/
+temp/

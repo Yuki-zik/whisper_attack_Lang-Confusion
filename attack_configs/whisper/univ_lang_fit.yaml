@@ -66,7 +66,7 @@ dataset_prepare_fct: !name:robust_speech.data.common_voice.prepare_common_voice
 dataio_prepare_fct: !name:robust_speech.data.dataio.dataio_prepare
 
 # Data files
-data_folder: !ref <root>/data/CommonVoice/<lang_CV> # e.g, /localscratch/LibriSpeech
+data_folder: /autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech
 csv_folder: !ref <data_folder>/csv # e.g, /localscratch/LibriSpeech
 test_splits: ["test"]
 skip_prep: True
@@ -74,8 +74,8 @@ ckpt_interval_minutes: 15 # save checkpoint every N min
 data_csv_name: test
 data_csv_name_train: fit
 test_csv:
-   - !ref <data_folder>/csv/<data_csv_name>.csv
-train_csv: !ref <data_folder>/../csv/<data_csv_name_train>.csv
+   - !ref <csv_folder>/test-clean.csv   # 你的评估/验证 CSV
+train_csv: !ref <csv_folder>/fit.csv   # 你为训练通用扰动准备的 CSV
 batch_size: 1 # This works for 2x GPUs with 32GB
 avoid_if_longer_than: 24.0
 sorting: random

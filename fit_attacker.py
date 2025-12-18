@@ -77,7 +77,19 @@ def fit(hparams_file, run_opts, overrides):
 
     # Dataset prep (parsing Librispeech)
     prepare_dataset = hparams["dataset_prepare_fct"]  # 数据准备函数
-
+    if (
+        hparams.get("test_splits") == ["test"]
+        and "test_csv" in hparams
+        and "librispeech" in str(hparams["dataset_prepare_fct"]).lower()
+    ):
+        test_csv = hparams["test_csv"]
+        if isinstance(test_csv, str):
+            test_csv = [test_csv]
+        hparams["test_splits"] = [Path(csv_path).stem for csv_path in test_csv]
+    if isinstance(prepare_dataset, str):
+        # allow passing import path via CLI overrides (loses !name tag)
+        module_path, fn_name = prepare_dataset.rsplit(".", 1)
+        prepare_dataset = getattr(__import__(module_path, fromlist=[fn_name]), fn_name)
     # multi-gpu (ddp) save data preparation
     run_on_main(
         prepare_dataset,
@@ -90,6 +102,16 @@ def fit(hparams_file, run_opts, overrides):
     )
 
     dataio_prepare = hparams["dataio_prepare_fct"]
+        # 确保测试相关的配置在 CLI 覆盖时仍保持列表格式。
+    # SpeechBrain 的 dataio_prepare 会用 zip(test_splits, test_csv) 逐项打包，
+    # 如果其中任一是字符串，会按字符迭代导致尝试打开 "/" 等非法路径。
+    # 因此在这里把字符串归一化为列表，避免再次触发 IsADirectoryError。
+    if isinstance(hparams.get("test_csv"), str):
+        hparams["test_csv"] = [hparams["test_csv"]]
+    if isinstance(hparams.get("test_splits"), str):
+        hparams["test_splits"] = [hparams["test_splits"]]
+    if isinstance(hparams.get("test_csv"), str):
+        hparams["test_csv"] = [hparams["test_csv"]]
     if "tokenizer_builder" in hparams:
         tokenizer = hparams["tokenizer_builder"](hparams["tokenizer_name"])
         hparams["tokenizer"] = tokenizer
