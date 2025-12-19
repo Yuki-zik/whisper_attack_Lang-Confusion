@@ -71,16 +71,14 @@ csv_folder: !ref <data_folder>/csv # e.g, /localscratch/LibriSpeech
 test_splits: ["test"]
 skip_prep: True
 ckpt_interval_minutes: 15 # save checkpoint every N min
-data_csv_name: test
+data_csv_name: test-clean
 data_csv_name_train: fit
+
 test_csv:
    - !ref <csv_folder>/<data_csv_name>.csv
-train_csv: !ref <csv_folder>/<data_csv_name_train>.csv
-   # CSV 文件至少需包含下列字段，避免 dataio 管线出现循环依赖：
-   # - ID：样本唯一识别码
-   # - duration：音频秒数
-   # - wav：音频文件路径（FLAC/WAV 等）
-   # - wrd：对应转录文本（若攻击语言识别，也需 lang 字段）
+train_csv:
+   - !ref <csv_folder>/<data_csv_name_train>.csv
+
 batch_size: 1 # This works for 2x GPUs with 32GB
 avoid_if_longer_than: 24.0
 sorting: random

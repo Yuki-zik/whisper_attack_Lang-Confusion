@@ -127,3 +127,38 @@ python inference.py --model whisper-medium.en --config untargeted-35
   year = {2023},  
 }
 ```
+
+
+
+---
+# Whisper 对抗攻击（Whisper Attack）uap
+
+ python fit_attacker.py attack_configs/whisper/univ_lang_fit.yaml \
+    --root=/root/autodl-tmp/whisper_attack_Lang-Confusion \
+    --dataset_prepare_fct=robust_speech.data.librispeech.prepare_librispeech \
+    --data_folder=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech \
+    --csv_folder=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
+    --train_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/fit.csv \
+    --test_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/test-clean.csv \
+    --lang_attack=zh --lang_CV=en \
+    --model_label=small \
+    --load_audio=True --batch_size=32 --nb_iter=5 --eps=0.005 --eps_item=0.001 \
+    --rel_eps_iter=0.01 --epochs=10 --success_every=100 --seed=1101
+
+
+
+```bash
+# 生成训练用 CSV
+python csv_make.py \
+  --split-path .../dev-clean \
+  --role fit \
+  --lang en --compute-duration
+
+# 生成测试用 CSV
+python csv_make.py \
+  --split-path /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/test-clean \
+  --role testclean \
+  --lang en --compute-duration
+```
+
+---
