@@ -18,6 +18,16 @@ from robust_speech.adversarial.utils import (
 )
 from tqdm import tqdm
 
+"""
+基于 RobustSpeech 框架实现的 Whisper 通用语言对抗攻击 (Universal Language Attack)。
+
+本脚本依赖 RobustSpeech (rs) 提供的三大核心基础设施：
+1. 攻击基类 (Inheritance): 继承 TrainableAttacker 和 ASRLinfPGDAttack，复用了标准的 PGD 攻击循环、参数检查点保存 (Checkpointer) 及实验生命周期管理，避免重复造轮子。
+2. 约束工具 (Utilities): 使用 linf_clamp 等数学工具函数，确保生成的通用扰动严格满足 L-inf 范数约束，无需手动处理复杂的梯度投影。
+3. 模型绑定 (Binding): 作为中间层无缝对接 SpeechBrain 的 WhisperASR 接口，实现了从攻击代码到目标模型的端到端前向传播与 Loss 计算。
+"""
+
+
 # 定义对抗扰动的最大长度：30秒 * 16000Hz采样率 = 480,000 个采样点
 # Whisper 处理音频的窗口通常是 30 秒
 MAXLEN = 16000 * 30

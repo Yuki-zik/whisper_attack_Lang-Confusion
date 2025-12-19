@@ -1,14 +1,24 @@
-"""生成 LibriSpeech 分割集的 CSV 清单，便于 run_attack/fit_attacker 使用。
+"""
+生成 LibriSpeech 分割集的 CSV 清单，便于 run_attack / fit_attacker 使用。
+
+新增能力：
+- 支持通过 --role 显式指定生成 fit.csv / test-clean.csv
+- 若未指定 --role，则保持原行为（使用 split 目录名）
 
 使用示例：
+    # 生成训练用 fit.csv
     python tools/generate_librispeech_csv.py \
-        --split-path /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/dev-clean \
-        --output-dir /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
+        --split-path /root/.../LibriSpeech/train-clean-100 \
+        --output-dir /root/.../LibriSpeech/csv \
+        --role fit \
         --lang en --compute-duration
 
-生成的 CSV 默认包含列 ID、duration、wav、wrd；
-- 若提供 --lang，将额外生成 lang 列；
-- 若未提供文字转写，则 wrd 为空字符串。
+    # 生成评估用 test-clean.csv
+    python tools/generate_librispeech_csv.py \
+        --split-path /root/.../LibriSpeech/test-clean \
+        --output-dir /root/.../LibriSpeech/csv \
+        --role testclean \
+        --lang en --compute-duration
 """
 
 import argparse
@@ -18,11 +28,7 @@ import soundfile
 
 
 def load_transcripts(split_root: pathlib.Path) -> dict:
-    """读取 LibriSpeech 分割集中的 .trans.txt 文件，返回 {音频ID: 文本}。
-
-    LibriSpeech 的转写文件以每行 "<音频ID> <文本>" 的形式存储。
-    """
-
+    """读取 LibriSpeech 分割集中的 .trans.txt 文件，返回 {音频ID: 文本}。"""
     transcripts = {}
     for trans_file in split_root.rglob("*.trans.txt"):
         for line in trans_file.read_text(encoding="utf-8").splitlines():
@@ -35,9 +41,13 @@ def load_transcripts(split_root: pathlib.Path) -> dict:
     return transcripts
 
 
-def collect_rows(split_root: pathlib.Path, transcripts: dict, lang: str, compute_duration: bool) -> list:
+def collect_rows(
+    split_root: pathlib.Path,
+    transcripts: dict,
+    lang: str,
+    compute_duration: bool,
+) -> list:
     """收集当前分割集的行数据。"""
-
     rows = []
     for wav in sorted(split_root.rglob("*.flac")):
         audio_id = wav.stem
@@ -45,29 +55,56 @@ def collect_rows(split_root: pathlib.Path, transcripts: dict, lang: str, compute
         if compute_duration:
             info = soundfile.info(str(wav))
             duration = info.frames / info.samplerate
-        rows.append(
-            {
-                "ID": audio_id,
-                "duration": duration,
-                "wav": str(wav),
-                "wrd": transcripts.get(audio_id, ""),
-                **({"lang": lang} if lang else {}),
-            }
-        )
+
+        row = {
+            "ID": audio_id,
+            "duration": duration,
+            "wav": str(wav),
+            "wrd": transcripts.get(audio_id, ""),
+        }
+        if lang:
+            row["lang"] = lang
+
+        rows.append(row)
     return rows
 
 
-def generate_csv(split_path: pathlib.Path, output_dir: pathlib.Path, lang: str, compute_duration: bool) -> pathlib.Path:
-    """为单个分割集生成 CSV 并返回输出路径。"""
+def resolve_output_name(split_path: pathlib.Path, role: str | None) -> str:
+    """
+    根据 role 决定输出 CSV 名称：
+    - role=fit        -> fit.csv
+    - role=testclean  -> test-clean.csv
+    - role=None       -> 使用 split_path.name.csv（保持原行为）
+    """
+    if role is None:
+        return f"{split_path.name}.csv"
 
+    role = role.lower()
+    if role == "fit":
+        return "fit.csv"
+    if role in ("test", "testclean", "test-clean"):
+        return "test-clean.csv"
+
+    raise ValueError(f"未知 role: {role}（支持 fit / testclean）")
+
+
+def generate_csv(
+    split_path: pathlib.Path,
+    output_dir: pathlib.Path,
+    lang: str,
+    compute_duration: bool,
+    role: str | None,
+) -> pathlib.Path:
+    """为单个分割集生成 CSV 并返回输出路径。"""
     if not split_path.exists():
-        raise FileNotFoundError(f"分割集路徑不存在: {split_path}")
+        raise FileNotFoundError(f"分割集路径不存在: {split_path}")
 
     transcripts = load_transcripts(split_path)
     rows = collect_rows(split_path, transcripts, lang, compute_duration)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{split_path.name}.csv"
+    csv_name = resolve_output_name(split_path, role)
+    output_path = output_dir / csv_name
 
     fieldnames = ["ID", "duration", "wav", "wrd"]
     if lang:
@@ -93,7 +130,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=pathlib.Path,
-        help="CSV 输出目录，默认使用第一個分割集的父目錄下的 csv 子目錄",
+        help="CSV 输出目录，默认使用第一个 split-path 的父目录下的 csv 子目录",
+    )
+    parser.add_argument(
+        "--role",
+        choices=["fit", "testclean"],
+        default=None,
+        help="可选：显式指定 CSV 用途（fit 或 testclean）",
     )
     parser.add_argument(
         "--lang",
@@ -116,8 +159,15 @@ def main() -> None:
         output_dir = args.split_path[0].parent / "csv"
 
     for split_path in args.split_path:
-        output_path = generate_csv(split_path, output_dir, args.lang, args.compute_duration)
-        print(f"已生成: {output_path} (共 {sum(1 for _ in output_path.open()) - 1} 條)")
+        output_path = generate_csv(
+            split_path=split_path,
+            output_dir=output_dir,
+            lang=args.lang,
+            compute_duration=args.compute_duration,
+            role=args.role,
+        )
+        num_rows = sum(1 for _ in output_path.open(encoding="utf-8")) - 1
+        print(f"已生成: {output_path} (共 {num_rows} 条)")
 
 
 if __name__ == "__main__":
