@@ -61,7 +61,7 @@ def generate_csv(split_path: pathlib.Path, output_dir: pathlib.Path, lang: str, 
     """为单个分割集生成 CSV 并返回输出路径。"""
 
     if not split_path.exists():
-        raise FileNotFoundError(f"分割集路徑不存在: {split_path}")
+        raise FileNotFoundError(f"分割集路径不存在: {split_path}")
 
     transcripts = load_transcripts(split_path)
     rows = collect_rows(split_path, transcripts, lang, compute_duration)
@@ -93,7 +93,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=pathlib.Path,
-        help="CSV 输出目录，默认使用第一個分割集的父目錄下的 csv 子目錄",
+        help="CSV 输出目录，默认使用第一个分割集的父目录下的 csv 子目录",
     )
     parser.add_argument(
         "--lang",
@@ -117,7 +117,9 @@ def main() -> None:
 
     for split_path in args.split_path:
         output_path = generate_csv(split_path, output_dir, args.lang, args.compute_duration)
-        print(f"已生成: {output_path} (共 {sum(1 for _ in output_path.open()) - 1} 條)")
+        with output_path.open() as f:
+            line_count = sum(1 for _ in f) - 1
+        print(f"已生成: {output_path} (共 {line_count} 条)")
 
 
 if __name__ == "__main__":
