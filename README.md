@@ -142,7 +142,7 @@ python inference.py --model whisper-medium.en --config untargeted-35
     --test_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/test-clean.csv \
     --lang_attack=zh --lang_CV=en \
     --model_label=small \
-    --load_audio=True --batch_size=32 --nb_iter=1 --eps=0.005 --eps_item=0.001 \
+    --load_audio=True --batch_size=32 --nb_iter=5 --eps=0.005 --eps_item=0.001 \
     --rel_eps_iter=0.01 --epochs=10 --success_every=100 --seed=1101
 
 
