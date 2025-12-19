@@ -76,11 +76,11 @@ data_csv_name_train: fit
 test_csv:
    - !ref <csv_folder>/<data_csv_name>.csv
 train_csv: !ref <csv_folder>/<data_csv_name_train>.csv
-   # CSV 檔案至少需包含下列欄位，避免 dataio 管線出現循環依賴：
-   # - ID：樣本唯一識別碼
-   # - duration：音訊秒數
-   # - wav：音訊檔案路徑（FLAC/WAV 等）
-   # - wrd：對應轉錄文本（若攻擊語言識別，也需 lang 欄位）
+   # CSV 文件至少需包含下列字段，避免 dataio 管线出现循环依赖：
+   # - ID：样本唯一识别码
+   # - duration：音频秒数
+   # - wav：音频文件路径（FLAC/WAV 等）
+   # - wrd：对应转录文本（若攻击语言识别，也需 lang 字段）
 batch_size: 1 # This works for 2x GPUs with 32GB
 avoid_if_longer_than: 24.0
 sorting: random

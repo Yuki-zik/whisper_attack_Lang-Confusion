@@ -104,7 +104,7 @@ def fit(hparams_file, run_opts, overrides):
         tokenizer = hparams["tokenizer_builder"](hparams["tokenizer_name"])
         hparams["tokenizer"] = tokenizer
     else:
-        tokenizer=hparams["tokenizer"]
+        tokenizer = hparams["tokenizer"]
 
     # 在构建数据集前提前验证 CSV 文件，避免因缺失必备列而触发循环依赖。
     def _collect_columns(csv_path):
@@ -241,7 +241,7 @@ def fit(hparams_file, run_opts, overrides):
         if missing_files:
             msg_parts.append(f"以下 CSV 路径不存在或不可读：{missing_files}。")
         msg_parts.append("请检查 train_csv/test_csv 内容与 dataio_prepare 配置是否匹配（例如是否包含 wav 路径、文本/语言标签列）。")
-        raise RuntimeError("".join(msg_parts)) from exc
+        raise RuntimeError("\n".join(msg_parts)) from exc
 
     # saving parameters
     checkpointer.save_checkpoint()
