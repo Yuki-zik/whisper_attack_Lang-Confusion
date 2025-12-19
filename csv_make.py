@@ -4,6 +4,7 @@
 新增能力：
 - 支持通过 --role 显式指定生成 fit.csv / test-clean.csv
 - 若未指定 --role，则保持原行为（使用 split 目录名）
+- 可用 --num-samples 随机抽取指定数量的音频生成 CSV，可配合 --seed 复现抽样
 
 使用示例：
     # 生成训练用 fit.csv
@@ -24,6 +25,7 @@
 import argparse
 import csv
 import pathlib
+import random
 import soundfile
 
 
@@ -46,10 +48,20 @@ def collect_rows(
     transcripts: dict,
     lang: str,
     compute_duration: bool,
+    sample_size: int | None,
+    seed: int | None,
 ) -> list:
     """收集当前分割集的行数据。"""
+    wav_files = sorted(split_root.rglob("*.flac"))
+
+    # 若用户指定抽样数量，则以随机采样控制输出行数，便于限制评估样本规模
+    if sample_size is not None and sample_size < len(wav_files):
+        if seed is not None:
+            random.seed(seed)
+        wav_files = random.sample(wav_files, sample_size)
+
     rows = []
-    for wav in sorted(split_root.rglob("*.flac")):
+    for wav in wav_files:
         audio_id = wav.stem
         duration = 0.0
         if compute_duration:
@@ -94,13 +106,22 @@ def generate_csv(
     lang: str,
     compute_duration: bool,
     role: str | None,
+    sample_size: int | None,
+    seed: int | None,
 ) -> pathlib.Path:
     """为单个分割集生成 CSV 并返回输出路径。"""
     if not split_path.exists():
         raise FileNotFoundError(f"分割集路径不存在: {split_path}")
 
     transcripts = load_transcripts(split_path)
-    rows = collect_rows(split_path, transcripts, lang, compute_duration)
+    rows = collect_rows(
+        split_root=split_path,
+        transcripts=transcripts,
+        lang=lang,
+        compute_duration=compute_duration,
+        sample_size=sample_size,
+        seed=seed,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_name = resolve_output_name(split_path, role)
@@ -148,11 +169,26 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="若提供则读取音频计算 duration；未提供时填充 0 以加快扫描",
     )
+    parser.add_argument(
+        "--num-samples",
+        type=int,
+        default=None,
+        help="可选：随机抽取的样本数，用于控制生成 CSV 的行数",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="可选：设置随机种子以复现抽样结果",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+
+    if args.num_samples is not None and args.num_samples <= 0:
+        raise ValueError("--num-samples 必须为正整数")
 
     output_dir = args.output_dir
     if output_dir is None:
@@ -165,6 +201,8 @@ def main() -> None:
             lang=args.lang,
             compute_duration=args.compute_duration,
             role=args.role,
+            sample_size=args.num_samples,
+            seed=args.seed,
         )
         num_rows = sum(1 for _ in output_path.open(encoding="utf-8")) - 1
         print(f"已生成: {output_path} (共 {num_rows} 条)")

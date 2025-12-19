@@ -105,9 +105,11 @@ def fit(hparams_file, run_opts, overrides):
 
     dataio_prepare = hparams["dataio_prepare_fct"]
     # 确保测试相关的配置在 CLI 覆盖时仍保持列表格式。
-        # 确保测试相关的配置在 CLI 覆盖时仍保持列表格式。
     # SpeechBrain 的 dataio_prepare 会用 zip(test_splits, test_csv) 逐项打包，
-    # 如果其中任一是字符串，会按字符迭代导致尝试打开 "/" 等非法路径。
+    # 每个 split 与一条 CSV 一一对应：例如 test_splits=["test_clean", "test_other"]
+    # 且 test_csv=[clean.csv, other.csv] 时会得到两个独立的测试集，稍后评估时
+    # 会分别调用 evaluate，而不是把所有测试样本合并后一次性跑完。若任一参数
+    # 以字符串形式传入，zip 会把字符串拆成字符迭代并尝试打开 "/" 等非法路径，
     # 因此在这里把字符串归一化为列表，避免再次触发 IsADirectoryError。
     if isinstance(hparams.get("test_csv"), str):
         hparams["test_csv"] = [hparams["test_csv"]]
