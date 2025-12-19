@@ -150,6 +150,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
             desc="Epoch",
             dynamic_ncols=True
         )
+        # 说明：self.epoch_counter 由命令行 --epochs（或 YAML 默认）创建，控制训练的
+        # 外层轮数；命令行修改 epochs，等价于改变 epoch_iter 的总迭代次数。
 
         for epoch in epoch_iter:
 
@@ -161,6 +163,9 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 dynamic_ncols=True,
                 leave=False
             )
+            # 说明：batch_iter 的批次数量由 DataLoader 决定；DataLoader 的 batch_size
+            # 直接取自命令行参数 --batch_size（或 YAML 中同名设置）。因此命令行改动
+            # batch_size 时，这里的迭代次数也会随之变化。
 
             for idx, batch in batch_iter:
                 batch = batch.to(self.asr_brain.device)
@@ -199,6 +204,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 if self.show_pgd_pbar:
                     pgd_range = tqdm(pgd_range, desc="PGD", dynamic_ncols=True, leave=False)
                 # 新增：确保 batch 级日志一定有值
+                # 说明：self.nb_iter 对应命令行 --nb_iter（或 YAML 默认值），代表每个
+                # batch 中 PGD 的迭代步数；命令行增大/减小该值会直接改变此循环长度。
 
                 for i in pgd_range:
                     used_pgd_steps = i + 1
@@ -237,12 +244,17 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     # 更新 r：沿着梯度下降方向走（让 loss 变小？注意这里是 Targeted Attack）
                     # 这里的代码写的是 `r - ...`，通常 Targeted Attack 也是最小化 Target Loss。
                     r.data = r.data - self.rel_eps_iter * self.eps_item * grad_sign
+                    # 说明：self.rel_eps_iter 来源于命令行 --rel_eps_iter，self.eps_item
+                    # 来源于命令行 --eps_item（若未指定则用 YAML 默认）。它们的乘积
+                    # 直接控制每一步 PGD 更新的步长大小。
 
                     # 截断 r：保证 r 自身不要太大
                     r.data = linf_clamp(r.data, self.eps_item)
 
                     # 截断总扰动：保证 (通用扰动 + 微调量) 总幅度不超过 eps 阈值
                     r.data = linf_clamp(delta_x + r.data, self.eps) - delta_x
+                    # 说明：self.eps 由命令行 --eps（或 YAML 默认）提供，用作 L_inf 投影
+                    # 半径；命令行调大/调小 eps，会影响允许的最大扰动幅度。
 
                     # 清空梯度，准备下一次迭代
                     if r.grad is not None:
@@ -272,6 +284,21 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     lang_max = self._safe_scalar(lang_loss, reduce="max")
                     l2_val = l2_norm.item() if torch.is_tensor(l2_norm) else float(l2_norm)
 
+                    # 计算当前批次的信噪比（SNR，单位 dB），便于观察扰动强度
+                    r_batch = r.unsqueeze(0).expand(delta_batch.size())
+                    noise = delta_batch + r_batch
+                    signal_power = wav_init.pow(2).mean()
+                    noise_power = noise.pow(2).mean()
+                    snr_db = float("inf")
+                    if noise_power.item() > 0:
+                        snr_db = (
+                            10
+                            * torch.log10(
+                                signal_power.clamp_min(1e-12)
+                                / noise_power.clamp_min(1e-12)
+                            )
+                        ).item()
+
                     # 注意：loss 可能是张量（向量），这里也做 safe reduce
                     total_mean = self._safe_scalar(loss, reduce="mean")
 
@@ -297,6 +324,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         "total_loss_mean": float(total_mean),
                         "r_linf": float(r_linf),
                         "delta_linf": float(delta_linf),
+                        "snr_db": float(snr_db),
                     })
 
                     # 更新进度条 postfix（每个 batch 都更新，但显示成本很低）
@@ -306,6 +334,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         "pgd": used_pgd_steps,
                         "δ∞": f"{delta_linf:.4f}",
                         "r∞": f"{r_linf:.4f}",
+                        "SNR(dB)": f"{snr_db:.2f}",
                     })
 
                     # 可选：每隔 log_every 个 batch 再额外打印一行更完整的日志
@@ -316,7 +345,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                             f"lang(mean/max)={lang_mean:.4f}/{lang_max:.4f} "
                             f"total(mean)={total_mean:.4f} "
                             f"l2={l2_val:.4f} "
-                            f"delta_linf={delta_linf:.6f} r_linf={r_linf:.6f}"
+                            f"delta_linf={delta_linf:.6f} r_linf={r_linf:.6f} "
+                            f"snr={snr_db:.2f}dB"
                         )
 
             # --- 评估阶段：每隔 success_every 轮检查一次成功率 ---
