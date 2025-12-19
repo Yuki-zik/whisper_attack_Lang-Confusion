@@ -80,7 +80,19 @@ def evaluate(hparams_file, run_opts, overrides):
 
     # Dataset prep (parsing Librispeech)
     prepare_dataset = hparams["dataset_prepare_fct"]  # 数据准备函数
-
+    if (
+        hparams.get("test_splits") == ["test"]
+        and "test_csv" in hparams
+        and "librispeech" in str(hparams["dataset_prepare_fct"]).lower()
+    ):
+        test_csv = hparams["test_csv"]
+        if isinstance(test_csv, str):
+            test_csv = [test_csv]
+        hparams["test_splits"] = [Path(csv_path).stem for csv_path in test_csv]
+    if isinstance(prepare_dataset, str):
+        # allow passing import path via CLI overrides (loses !name tag)
+        module_path, fn_name = prepare_dataset.rsplit(".", 1)
+        prepare_dataset = getattr(__import__(module_path, fromlist=[fn_name]), fn_name)
     # multi-gpu (ddp) save data preparation
     run_on_main(
         prepare_dataset,
