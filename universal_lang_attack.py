@@ -272,6 +272,21 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     lang_max = self._safe_scalar(lang_loss, reduce="max")
                     l2_val = l2_norm.item() if torch.is_tensor(l2_norm) else float(l2_norm)
 
+                    # 计算当前批次的信噪比（SNR，单位 dB），便于观察扰动强度
+                    r_batch = r.unsqueeze(0).expand(delta_batch.size())
+                    noise = delta_batch + r_batch
+                    signal_power = wav_init.pow(2).mean()
+                    noise_power = noise.pow(2).mean()
+                    snr_db = float("inf")
+                    if noise_power.item() > 0:
+                        snr_db = (
+                            10
+                            * torch.log10(
+                                signal_power.clamp_min(1e-12)
+                                / noise_power.clamp_min(1e-12)
+                            )
+                        ).item()
+
                     # 注意：loss 可能是张量（向量），这里也做 safe reduce
                     total_mean = self._safe_scalar(loss, reduce="mean")
 
@@ -297,6 +312,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         "total_loss_mean": float(total_mean),
                         "r_linf": float(r_linf),
                         "delta_linf": float(delta_linf),
+                        "snr_db": float(snr_db),
                     })
 
                     # 更新进度条 postfix（每个 batch 都更新，但显示成本很低）
@@ -306,6 +322,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         "pgd": used_pgd_steps,
                         "δ∞": f"{delta_linf:.4f}",
                         "r∞": f"{r_linf:.4f}",
+                        "SNR(dB)": f"{snr_db:.2f}",
                     })
 
                     # 可选：每隔 log_every 个 batch 再额外打印一行更完整的日志
@@ -316,7 +333,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                             f"lang(mean/max)={lang_mean:.4f}/{lang_max:.4f} "
                             f"total(mean)={total_mean:.4f} "
                             f"l2={l2_val:.4f} "
-                            f"delta_linf={delta_linf:.6f} r_linf={r_linf:.6f}"
+                            f"delta_linf={delta_linf:.6f} r_linf={r_linf:.6f} "
+                            f"snr={snr_db:.2f}dB"
                         )
 
             # --- 评估阶段：每隔 success_every 轮检查一次成功率 ---
