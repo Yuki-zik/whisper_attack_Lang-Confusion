@@ -9,10 +9,15 @@
 使用示例：
     # 生成训练用 fit.csv
     python csv_make.py \
-        --split-path /root/.../LibriSpeech/train-clean-100 \
-        --output-dir /root/.../LibriSpeech/csv \
+        --split-path /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/test-clean \
+        --output-dir /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
         --role fit \
-        --lang en --compute-duration
+        --lang en --compute-duration \
+        --seed 42 \
+        --num-samples 73
+
+
+
 
     # 生成评估用 test-clean.csv
     python csv_make.py \
