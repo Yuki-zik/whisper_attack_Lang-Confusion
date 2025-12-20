@@ -70,6 +70,14 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
             asr_brain.tokenizer.encode(self.language, allowed_special="all")
         ).to(asr_brain.device)
 
+        # tokenizer 中的语言 token -> 语言码映射，用于日志解码
+        self.lang_token_to_code = {}
+        if hasattr(asr_brain, "tokenizer"):
+            toks = getattr(asr_brain.tokenizer, "all_language_tokens", None)
+            codes = getattr(asr_brain.tokenizer, "all_language_codes", None)
+            if toks is not None and codes is not None and len(toks) == len(codes):
+                self.lang_token_to_code = {int(t): c for t, c in zip(toks, codes)}
+
         # 2. 初始化父类 ASRLinfPGDAttack
         # WhisperLangID 是一个包装类，用于计算语言识别的 Loss
         # targeted=True 表示这是有目标攻击（一定要让模型输出特定结果，而不是只要出错就行）
@@ -104,6 +112,16 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         self.show_pgd_pbar = show_pgd_pbar
         self.ema_alpha = ema_alpha
 
+        # 尝试记录数据集的“源语言”标注，便于日志对照；不存在则留空
+        src_lang = getattr(asr_brain.hparams, "lang_CV", None)
+        if src_lang is None:
+            src_lang = getattr(asr_brain.hparams, "language", None)
+        if src_lang:
+            src_lang = str(src_lang).strip("<|>")
+            self.source_language = f"<|{src_lang}|>({src_lang})"
+        else:
+            self.source_language = None
+
         self.train_history = []  # 逐 batch 记录关键指标
         self.eval_history = []   # 逐 eval 记录 success/loss
         self._warned_lang_shape = False
@@ -134,6 +152,18 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 tok = tok.item()
             else:
                 tok = tok.view(-1).tolist()
+
+        # 先尝试使用 tokenizer 的语言映射（比 decode 更稳妥）
+        if isinstance(tok, (int, float)):
+            tid = int(tok)
+            if tid in self.lang_token_to_code:
+                code = self.lang_token_to_code[tid]
+                return f"<|{code}|>({code})"
+        elif isinstance(tok, list) and len(tok) == 1:
+            tid = int(tok[0])
+            if tid in self.lang_token_to_code:
+                code = self.lang_token_to_code[tid]
+                return f"<|{code}|>({code})"
         try:
             if isinstance(tok, (list, tuple)):
                 decoded = self.asr_brain.tokenizer.decode(tok, skip_special_tokens=False)
@@ -196,8 +226,10 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
             target_tok_scalar = self.lang_token.view(-1)[0] if torch.is_tensor(self.lang_token) else self.lang_token
             target_text = self._decode_lang_token(target_tok_scalar)
 
+            src_text = self.source_language if self.source_language else "N/A"
+
             print(
-                f"[lang-pred] epoch={epoch} target={target_text} "
+                f"[lang-pred] epoch={epoch} target={target_text} src={src_text} "
                 f"preds(前{len(pred_texts)}条)={pred_texts}"
             )
 
