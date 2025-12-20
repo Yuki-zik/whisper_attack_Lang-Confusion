@@ -53,6 +53,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         epoch_counter=None,
         # ======== 新增：日志/进度条相关配置（不影响攻击逻辑）========
         log_every=20,          # 每隔多少个 batch 输出一次训练统计
+        log_lang_pred_every=20,  # 每隔多少个 epoch 打印一次语种预测结果，便于观察 delta 的攻击倾向
+        log_lang_pred_samples=5,  # 每次打印时输出多少条样本的预测，便于观察多条样本的偏移
         show_pgd_pbar=False,   # 是否显示 PGD 内循环进度条（会比较慢）
         ema_alpha=0.05,        # loss 的滑动平均系数
         **kwargs
@@ -97,6 +99,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
 
         # ======== 新增：训练过程记录（方便你画 loss 曲线）========
         self.log_every = log_every
+        self.log_lang_pred_every = log_lang_pred_every
+        self.log_lang_pred_samples = log_lang_pred_samples
         self.show_pgd_pbar = show_pgd_pbar
         self.ema_alpha = ema_alpha
 
@@ -121,6 +125,81 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 return x.max().item()
             return x.mean().item()
         return float(x)
+
+    def _decode_lang_token(self, tok):
+        """尝试将语言 token id 反解为可读文本，失败则返回原值字符串。"""
+        if torch.is_tensor(tok):
+            tok = tok.detach()
+            if tok.numel() == 1:
+                tok = tok.item()
+            else:
+                tok = tok.view(-1).tolist()
+        try:
+            if isinstance(tok, (list, tuple)):
+                decoded = self.asr_brain.tokenizer.decode(tok, skip_special_tokens=False)
+            else:
+                tid = int(tok)
+                decoded = self.asr_brain.tokenizer.decode([tid], skip_special_tokens=False)
+
+            # 若是 <|xx|> 形式的语言 token，额外输出简洁语言码，便于快速辨识
+            if isinstance(decoded, str) and decoded.startswith("<|") and decoded.endswith("|>"):
+                lang_code = decoded[2:-2]
+                return f"{decoded}({lang_code})"
+            return decoded
+        except Exception:
+            return str(tok)
+
+    def _log_language_predictions(self, loader, delta, epoch):
+        """
+        额外的诊断日志：抽取一个 batch，在当前通用扰动下前向，打印语言预测。默认每 20 个 epoch 打印一次。
+        不参与训练梯度，主要用于观察扰动是否把预测推向目标语言。
+        """
+        with torch.no_grad():
+            collected = 0
+            pred_texts = []
+
+            for sample_batch in loader:
+                sample_batch = sample_batch.to(self.asr_brain.device)
+                wav_init, wav_lens = sample_batch.sig
+
+                delta_x = torch.zeros_like(wav_init[0])
+                if wav_init.shape[1] <= delta.shape[0]:
+                    begin = torch.randint(delta.shape[0] - wav_init.shape[1] - 1, size=(1,))
+                    delta_x = delta[begin: begin + wav_init.shape[1]]
+                else:
+                    delta_x[:delta.shape[0]] = delta
+
+                delta_batch = delta_x.unsqueeze(0).expand(wav_init.size()).to(self.asr_brain.device)
+                sample_batch.sig = wav_init + delta_batch, wav_lens
+
+                predictions = self.asr_brain.compute_forward(sample_batch, rs.Stage.ATTACK)
+                language_tokens_pred, _, _ = predictions
+
+                if torch.is_tensor(language_tokens_pred):
+                    flat_pred = language_tokens_pred.view(-1)
+                    for tok in flat_pred:
+                        pred_texts.append(self._decode_lang_token(tok))
+                        collected += 1
+                        if collected >= self.log_lang_pred_samples:
+                            break
+                else:
+                    pred_texts.append(f"非张量预测: {language_tokens_pred}")
+                    collected += 1
+
+                if collected >= self.log_lang_pred_samples:
+                    break
+
+            if collected == 0:
+                print("[lang-pred] 数据加载器为空，跳过语言预测打印")
+                return
+
+            target_tok_scalar = self.lang_token.view(-1)[0] if torch.is_tensor(self.lang_token) else self.lang_token
+            target_text = self._decode_lang_token(target_tok_scalar)
+
+            print(
+                f"[lang-pred] epoch={epoch} target={target_text} "
+                f"preds(前{len(pred_texts)}条)={pred_texts}"
+            )
 
     def _compute_universal_perturbation(self, loader):
         """
@@ -150,6 +229,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
             desc="Epoch",
             dynamic_ncols=True
         )
+        # 说明：self.epoch_counter 由命令行 --epochs（或 YAML 默认）创建，控制训练的
+        # 外层轮数；命令行修改 epochs，等价于改变 epoch_iter 的总迭代次数。
 
         for epoch in epoch_iter:
 
@@ -161,6 +242,9 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 dynamic_ncols=True,
                 leave=False
             )
+            # 说明：batch_iter 的批次数量由 DataLoader 决定；DataLoader 的 batch_size
+            # 直接取自命令行参数 --batch_size（或 YAML 中同名设置）。因此命令行改动
+            # batch_size 时，这里的迭代次数也会随之变化。
 
             for idx, batch in batch_iter:
                 batch = batch.to(self.asr_brain.device)
@@ -199,6 +283,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 if self.show_pgd_pbar:
                     pgd_range = tqdm(pgd_range, desc="PGD", dynamic_ncols=True, leave=False)
                 # 新增：确保 batch 级日志一定有值
+                # 说明：self.nb_iter 对应命令行 --nb_iter（或 YAML 默认值），代表每个
+                # batch 中 PGD 的迭代步数；命令行增大/减小该值会直接改变此循环长度。
 
                 for i in pgd_range:
                     used_pgd_steps = i + 1
@@ -237,12 +323,17 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     # 更新 r：沿着梯度下降方向走（让 loss 变小？注意这里是 Targeted Attack）
                     # 这里的代码写的是 `r - ...`，通常 Targeted Attack 也是最小化 Target Loss。
                     r.data = r.data - self.rel_eps_iter * self.eps_item * grad_sign
+                    # 说明：self.rel_eps_iter 来源于命令行 --rel_eps_iter，self.eps_item
+                    # 来源于命令行 --eps_item（若未指定则用 YAML 默认）。它们的乘积
+                    # 直接控制每一步 PGD 更新的步长大小。
 
                     # 截断 r：保证 r 自身不要太大
                     r.data = linf_clamp(r.data, self.eps_item)
 
                     # 截断总扰动：保证 (通用扰动 + 微调量) 总幅度不超过 eps 阈值
                     r.data = linf_clamp(delta_x + r.data, self.eps) - delta_x
+                    # 说明：self.eps 由命令行 --eps（或 YAML 默认）提供，用作 L_inf 投影
+                    # 半径；命令行调大/调小 eps，会影响允许的最大扰动幅度。
 
                     # 清空梯度，准备下一次迭代
                     if r.grad is not None:
@@ -272,6 +363,21 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     lang_max = self._safe_scalar(lang_loss, reduce="max")
                     l2_val = l2_norm.item() if torch.is_tensor(l2_norm) else float(l2_norm)
 
+                    # 计算当前批次的信噪比（SNR，单位 dB），便于观察扰动强度
+                    r_batch = r.unsqueeze(0).expand(delta_batch.size())
+                    noise = delta_batch + r_batch
+                    signal_power = wav_init.pow(2).mean()
+                    noise_power = noise.pow(2).mean()
+                    snr_db = float("inf")
+                    if noise_power.item() > 0:
+                        snr_db = (
+                            10
+                            * torch.log10(
+                                signal_power.clamp_min(1e-12)
+                                / noise_power.clamp_min(1e-12)
+                            )
+                        ).item()
+
                     # 注意：loss 可能是张量（向量），这里也做 safe reduce
                     total_mean = self._safe_scalar(loss, reduce="mean")
 
@@ -297,6 +403,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         "total_loss_mean": float(total_mean),
                         "r_linf": float(r_linf),
                         "delta_linf": float(delta_linf),
+                        "snr_db": float(snr_db),
                     })
 
                     # 更新进度条 postfix（每个 batch 都更新，但显示成本很低）
@@ -306,6 +413,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         "pgd": used_pgd_steps,
                         "δ∞": f"{delta_linf:.4f}",
                         "r∞": f"{r_linf:.4f}",
+                        "SNR(dB)": f"{snr_db:.2f}",
                     })
 
                     # 可选：每隔 log_every 个 batch 再额外打印一行更完整的日志
@@ -316,7 +424,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                             f"lang(mean/max)={lang_mean:.4f}/{lang_max:.4f} "
                             f"total(mean)={total_mean:.4f} "
                             f"l2={l2_val:.4f} "
-                            f"delta_linf={delta_linf:.6f} r_linf={r_linf:.6f}"
+                            f"delta_linf={delta_linf:.6f} r_linf={r_linf:.6f} "
+                            f"snr={snr_db:.2f}dB"
                         )
 
             # --- 评估阶段：每隔 success_every 轮检查一次成功率 ---
@@ -410,6 +519,14 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     best_success_rate = success_rate
                     self.univ_perturb.tensor.data = delta.detach()
                     self.checkpointer.save_and_keep_only()  # 保存 checkpoint
+
+            # --- 语种预测观测：每隔 log_lang_pred_every 轮打印一次 ---
+            if (
+                self.log_lang_pred_every is not None
+                and self.log_lang_pred_every > 0
+                and (epoch % self.log_lang_pred_every) == 0
+            ):
+                self._log_language_predictions(loader, delta, epoch)
 
             # 更新 epoch 进度条信息
             epoch_iter.set_postfix({
