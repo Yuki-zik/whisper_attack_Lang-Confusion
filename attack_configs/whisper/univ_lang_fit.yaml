@@ -68,8 +68,6 @@ dataio_prepare_fct: !name:robust_speech.data.dataio.dataio_prepare
 # Data files
 data_folder: !ref <root>/data/CommonVoice/<lang_CV> # e.g, /localscratch/LibriSpeech
 csv_folder: !ref <data_folder>/csv # e.g, /localscratch/LibriSpeech
-# data_folder: /autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech
-# csv_folder: !ref <data_folder>/csv # e.g, /localscratch/LibriSpeech
 test_splits: ["test"]
 skip_prep: True
 ckpt_interval_minutes: 15 # save checkpoint every N min
