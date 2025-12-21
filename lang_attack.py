@@ -43,7 +43,9 @@ def compute_forward_lang(whisper_asr_brain, batch, stage):
             whisper_asr_brain.modules.whisper.model, mel
         )
         all_lang_tokens.append(lang_tok.squeeze())                        # (1,) -> 标量
-        all_lang_probs.append(lang_prob.squeeze())                        # (1, num_lang)
+        # detect_language_with_gradients 可能返回字典形式的概率，这里统一使用 logits
+        # 计算 softmax 概率，避免字典缺少 squeeze 方法导致报错
+        all_lang_probs.append(torch.softmax(lang_logits, dim=-1).squeeze())
         all_logits.append(lang_logits.squeeze())                          # (1, num_lang)
 
     language_tokens = torch.stack(all_lang_tokens).to(whisper_asr_brain.device)
