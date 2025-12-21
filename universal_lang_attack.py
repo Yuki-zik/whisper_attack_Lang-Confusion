@@ -484,61 +484,63 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 else:
                     target_tok_scalar = target_tok
 
-                # 遍历整个 loader 进行验证
-                eval_iter = tqdm(loader, dynamic_ncols=True, desc=f"Eval (epoch={epoch})", leave=False)
-                for idx_eval, batch in enumerate(eval_iter):
-                    batch = batch.to(self.asr_brain.device)
-                    wav_init, wav_lens = batch.sig
+                # 验证阶段无需反向传播，显式 no_grad 可大幅降低显存占用
+                with torch.no_grad():
+                    # 遍历整个 loader 进行验证
+                    eval_iter = tqdm(loader, dynamic_ncols=True, desc=f"Eval (epoch={epoch})", leave=False)
+                    for idx_eval, batch in enumerate(eval_iter):
+                        batch = batch.to(self.asr_brain.device)
+                        wav_init, wav_lens = batch.sig
 
-                    # 再次构造扰动并叠加（不求导，只推理）
-                    delta_x = torch.zeros_like(wav_init[0])
-                    if wav_init.shape[1] <= delta.shape[0]:
-                        begin = torch.randint(delta.shape[0] - wav_init.shape[1] - 1, size=(1,))
-                        delta_x = delta[begin: begin + wav_init.shape[1]]
-                    else:
-                        delta_x[:delta.shape[0]] = delta
-
-                    delta_batch = delta_x.unsqueeze(0).expand(wav_init.size()).to(self.asr_brain.device)
-                    batch.sig = wav_init + delta_batch, wav_lens
-
-                    # 获取预测结果
-                    predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
-
-                    # 你原来假设 predictions 返回 (token, ..., ...)
-                    language_tokens_pred, _, _ = predictions
-
-                    # 统计：如果预测 token 等于目标 lang_token，则视为“被愚弄成功”
-                    # 这里做一个尽量宽容的处理：优先按“每个样本一个 token”的情况统计
-                    total_sample += float(batch.batchsize)
-
-                    if torch.is_tensor(language_tokens_pred):
-                        # 常见情况：language_tokens_pred shape = (B,) 或 (B,1)
-                        pred_flat = language_tokens_pred.view(-1)
-
-                        # 如果 target_tok 不是单 token，严格相等可能维度对不上，这里至少保证不崩
-                        if torch.is_tensor(target_tok_scalar):
-                            cmp = (pred_flat == target_tok_scalar)
+                        # 再次构造扰动并叠加（不求导，只推理）
+                        delta_x = torch.zeros_like(wav_init[0])
+                        if wav_init.shape[1] <= delta.shape[0]:
+                            begin = torch.randint(delta.shape[0] - wav_init.shape[1] - 1, size=(1,))
+                            delta_x = delta[begin: begin + wav_init.shape[1]]
                         else:
-                            cmp = (pred_flat == torch.tensor(target_tok_scalar, device=pred_flat.device))
+                            delta_x[:delta.shape[0]] = delta
 
-                        fooled_sample += float(cmp.sum().item())
-                    else:
-                        # 极端情况：predictions 不是 tensor
-                        if not self._warned_lang_shape:
-                            print("[warn] language_tokens_pred is not a tensor; success stats may be unreliable.")
-                            self._warned_lang_shape = True
+                        delta_batch = delta_x.unsqueeze(0).expand(wav_init.size()).to(self.asr_brain.device)
+                        batch.sig = wav_init + delta_batch, wav_lens
 
-                    # loss 统计
-                    ll = self.asr_brain.compute_objectives(predictions, batch, rs.Stage.ATTACK)
-                    eval_loss_sum += self._safe_scalar(ll, reduce="mean")
+                        # 获取预测结果
+                        predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
 
-                    # 更新 eval 进度条
-                    cur_sr = (fooled_sample / total_sample) if total_sample > 0 else 0.0
-                    cur_loss = eval_loss_sum / (idx_eval + 1)
-                    eval_iter.set_postfix({
-                        "sr": f"{cur_sr:.3f}",
-                        "loss": f"{cur_loss:.4f}",
-                    })
+                        # 你原来假设 predictions 返回 (token, ..., ...)
+                        language_tokens_pred, _, _ = predictions
+
+                        # 统计：如果预测 token 等于目标 lang_token，则视为“被愚弄成功”
+                        # 这里做一个尽量宽容的处理：优先按“每个样本一个 token”的情况统计
+                        total_sample += float(batch.batchsize)
+
+                        if torch.is_tensor(language_tokens_pred):
+                            # 常见情况：language_tokens_pred shape = (B,) 或 (B,1)
+                            pred_flat = language_tokens_pred.view(-1)
+
+                            # 如果 target_tok 不是单 token，严格相等可能维度对不上，这里至少保证不崩
+                            if torch.is_tensor(target_tok_scalar):
+                                cmp = (pred_flat == target_tok_scalar)
+                            else:
+                                cmp = (pred_flat == torch.tensor(target_tok_scalar, device=pred_flat.device))
+
+                            fooled_sample += float(cmp.sum().item())
+                        else:
+                            # 极端情况：predictions 不是 tensor
+                            if not self._warned_lang_shape:
+                                print("[warn] language_tokens_pred is not a tensor; success stats may be unreliable.")
+                                self._warned_lang_shape = True
+
+                        # loss 统计
+                        ll = self.asr_brain.compute_objectives(predictions, batch, rs.Stage.ATTACK)
+                        eval_loss_sum += self._safe_scalar(ll, reduce="mean")
+
+                        # 更新 eval 进度条
+                        cur_sr = (fooled_sample / total_sample) if total_sample > 0 else 0.0
+                        cur_loss = eval_loss_sum / (idx_eval + 1)
+                        eval_iter.set_postfix({
+                            "sr": f"{cur_sr:.3f}",
+                            "loss": f"{cur_loss:.4f}",
+                        })
 
                 success_rate = fooled_sample / total_sample if total_sample > 0 else 0.0
                 mean_eval_loss = eval_loss_sum / (idx_eval + 1) if (idx_eval + 1) > 0 else float("nan")
