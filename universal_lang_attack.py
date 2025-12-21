@@ -339,7 +339,10 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
 
                     # 计算 Loss：目标是让预测结果接近目标语言 token
-                    lang_loss = self.asr_brain.compute_objectives(predictions, batch, rs.Stage.ATTACK)
+                    # reduction="mean" 保证得到标量 loss，避免反向传播时报 "grad can be implicitly created only for scalar outputs"
+                    lang_loss = self.asr_brain.compute_objectives(
+                        predictions, batch, rs.Stage.ATTACK, reduction="mean"
+                    )
 
                     # 辅助 Loss：L2 正则化，希望 r 越小越好（微调量不要太大）
                     l2_norm = r.norm(p=2).to(self.asr_brain.device)
@@ -385,7 +388,9 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         r_batch = r.unsqueeze(0).expand(delta_batch.size())
                         batch.sig = wav_init + delta_batch + r_batch, wav_lens
                         predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
-                        lang_loss = self.asr_brain.compute_objectives(predictions, batch, rs.Stage.ATTACK)
+                        lang_loss = self.asr_brain.compute_objectives(
+                            predictions, batch, rs.Stage.ATTACK, reduction="mean"
+                        )
                         l2_norm = r.norm(p=2).to(self.asr_brain.device)
                         loss = 0.5 * l2_norm + lang_loss
                 # 确保最终的 delta_x 符合约束
