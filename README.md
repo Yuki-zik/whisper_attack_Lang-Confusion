@@ -140,11 +140,17 @@ python inference.py --model whisper-medium.en --config untargeted-35
     --csv_folder=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
     --train_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/fit.csv \
     --test_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/test-clean.csv \
-    --lang_attack=zh --lang_CV=en \
+    --lang_attack=fr --lang_CV=en \
     --model_label=small \
-    --load_audio=True --batch_size=32 --nb_iter=5 --eps=0.005 --eps_item=0.001 \
-    --rel_eps_iter=0.01 --epochs=10 --success_every=100 --seed=1101
+    --load_audio=False \
+    --batch_size=32 --nb_iter=10 --eps=0.02 --eps_item=0.01 \
+    --rel_eps_iter=0.1 --epochs=5000 --success_every=100 --seed=1101
 
+  python fit_attacker.py attack_configs/whisper/univ_lang_fit.yaml \
+    --lang_CV=it --lang_attack=sr --model_label=medium \
+    --data_csv_name="test-90 --output_folder=/path/to/robust_speech/attacks/univ_lang/sr/whisper-medium/1101" \
+    --root=$RSROOT --load_audio=True --seed=1101 --nb_iter=1 --eps=0.005 \
+    --epochs=10000 --batch_size=1 --rel_eps_iter=0.01 --success_every=100
 
 
 ```bash
@@ -154,7 +160,7 @@ python csv_make.py \
   --role fit \
   --lang en --compute-duration
 
-# 生成测试用 CSV
+# 生成测试用 CSVda
 python csv_make.py \
   --split-path /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/test-clean \
   --role testclean \

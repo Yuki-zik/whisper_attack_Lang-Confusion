@@ -70,6 +70,14 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
             asr_brain.tokenizer.encode(self.language, allowed_special="all")
         ).to(asr_brain.device)
 
+        # tokenizer 中的语言 token -> 语言码映射，用于日志解码
+        self.lang_token_to_code = {}
+        if hasattr(asr_brain, "tokenizer"):
+            toks = getattr(asr_brain.tokenizer, "all_language_tokens", None)
+            codes = getattr(asr_brain.tokenizer, "all_language_codes", None)
+            if toks is not None and codes is not None and len(toks) == len(codes):
+                self.lang_token_to_code = {int(t): c for t, c in zip(toks, codes)}
+
         # 2. 初始化父类 ASRLinfPGDAttack
         # WhisperLangID 是一个包装类，用于计算语言识别的 Loss
         # targeted=True 表示这是有目标攻击（一定要让模型输出特定结果，而不是只要出错就行）
@@ -103,6 +111,16 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         self.log_lang_pred_samples = log_lang_pred_samples
         self.show_pgd_pbar = show_pgd_pbar
         self.ema_alpha = ema_alpha
+
+        # 尝试记录数据集的“源语言”标注，便于日志对照；不存在则留空
+        src_lang = getattr(asr_brain.hparams, "lang_CV", None)
+        if src_lang is None:
+            src_lang = getattr(asr_brain.hparams, "language", None)
+        if src_lang:
+            src_lang = str(src_lang).strip("<|>")
+            self.source_language = f"<|{src_lang}|>({src_lang})"
+        else:
+            self.source_language = None
 
         self.train_history = []  # 逐 batch 记录关键指标
         self.eval_history = []   # 逐 eval 记录 success/loss
