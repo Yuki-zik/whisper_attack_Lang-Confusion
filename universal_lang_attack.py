@@ -152,46 +152,51 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 tok = tok.item()
             else:
                 tok = tok.view(-1).tolist()
-
-        # 先尝试使用 tokenizer 的语言映射（比 decode 更稳妥）
-        if isinstance(tok, (int, float)):
-            tid = int(tok)
-            if tid in self.lang_token_to_code:
-                code = self.lang_token_to_code[tid]
-                return f"<|{code}|>({code})"
-        elif isinstance(tok, list) and len(tok) == 1:
-            tid = int(tok[0])
-            if tid in self.lang_token_to_code:
-                code = self.lang_token_to_code[tid]
-                return f"<|{code}|>({code})"
         try:
+            # Whisper tokenizer 对语言 token 的处理有时不经过标准 decode，这里先尝试标准 decode，
+            # 失败后回退到 tokenizer.tokenizer.decode_single_token_bytes 的底层接口，确保语言 ID 能映射到 <|xx|> 文本。
+            decoded = None
+            tid = None
             if isinstance(tok, (list, tuple)):
                 decoded = self.asr_brain.tokenizer.decode(tok, skip_special_tokens=False)
+                if tok:
+                    tid = int(tok[0])
             else:
                 tid = int(tok)
                 decoded = self.asr_brain.tokenizer.decode([tid], skip_special_tokens=False)
+
+            if (not decoded) and (tid is not None) and hasattr(self.asr_brain.tokenizer, "tokenizer"):
+                base_tok = self.asr_brain.tokenizer.tokenizer
+                if hasattr(base_tok, "decode_single_token_bytes"):
+                    decoded = base_tok.decode_single_token_bytes(int(tid)).decode("utf-8")
 
             # 若是 <|xx|> 形式的语言 token，额外输出简洁语言码，便于快速辨识
             if isinstance(decoded, str) and decoded.startswith("<|") and decoded.endswith("|>"):
                 lang_code = decoded[2:-2]
                 return f"{decoded}({lang_code})"
-            return decoded
+            return decoded if decoded is not None else str(tok)
         except Exception:
             return str(tok)
 
     def _log_language_predictions(self, loader, delta, epoch):
         """
         额外的诊断日志：抽取一个 batch，在当前通用扰动下前向，打印语言预测。默认每 20 个 epoch 打印一次。
-        不参与训练梯度，主要用于观察扰动是否把预测推向目标语言。
+        不参与训练梯度，主要用于观察扰动是否把预测推向目标语言，并同时给出未加扰动的“源语言预测”。
         """
         with torch.no_grad():
             collected = 0
-            pred_texts = []
+            adv_pred_texts = []
+            clean_pred_texts = []
 
             for sample_batch in loader:
                 sample_batch = sample_batch.to(self.asr_brain.device)
                 wav_init, wav_lens = sample_batch.sig
 
+                # 先记录未加扰动的语言预测，便于对比“源语言→扰动后的语言”
+                clean_predictions = self.asr_brain.compute_forward(sample_batch, rs.Stage.ATTACK)
+                clean_lang_tokens, _, _ = clean_predictions
+
+                # 构造扰动后的对抗样本
                 delta_x = torch.zeros_like(wav_init[0])
                 if wav_init.shape[1] <= delta.shape[0]:
                     begin = torch.randint(delta.shape[0] - wav_init.shape[1] - 1, size=(1,))
@@ -205,16 +210,22 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 predictions = self.asr_brain.compute_forward(sample_batch, rs.Stage.ATTACK)
                 language_tokens_pred, _, _ = predictions
 
-                if torch.is_tensor(language_tokens_pred):
-                    flat_pred = language_tokens_pred.view(-1)
-                    for tok in flat_pred:
-                        pred_texts.append(self._decode_lang_token(tok))
-                        collected += 1
-                        if collected >= self.log_lang_pred_samples:
-                            break
-                else:
-                    pred_texts.append(f"非张量预测: {language_tokens_pred}")
-                    collected += 1
+                def _collect_preds(tensor_preds, bucket, remaining):
+                    added = 0
+                    if torch.is_tensor(tensor_preds):
+                        flat_pred = tensor_preds.view(-1)
+                        for tok in flat_pred:
+                            bucket.append(self._decode_lang_token(tok))
+                            added += 1
+                            if added >= remaining:
+                                break
+                    else:
+                        bucket.append(f"非张量预测: {tensor_preds}")
+                        added += 1
+                    return added
+
+                collected += _collect_preds(language_tokens_pred, adv_pred_texts, self.log_lang_pred_samples - collected)
+                _collect_preds(clean_lang_tokens, clean_pred_texts, self.log_lang_pred_samples)
 
                 if collected >= self.log_lang_pred_samples:
                     break
@@ -226,11 +237,10 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
             target_tok_scalar = self.lang_token.view(-1)[0] if torch.is_tensor(self.lang_token) else self.lang_token
             target_text = self._decode_lang_token(target_tok_scalar)
 
-            src_text = self.source_language if self.source_language else "N/A"
-
             print(
-                f"[lang-pred] epoch={epoch} target={target_text} src={src_text} "
-                f"preds(前{len(pred_texts)}条)={pred_texts}"
+                f"[lang-pred] epoch={epoch} target={target_text} "
+                f"clean(前{len(clean_pred_texts)}条)={clean_pred_texts} "
+                f"adv(前{len(adv_pred_texts)}条)={adv_pred_texts}"
             )
 
     def _compute_universal_perturbation(self, loader):
