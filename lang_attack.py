@@ -17,13 +17,17 @@ def compute_forward_lang(whisper_asr_brain, batch, stage):
     if hasattr(whisper_asr_brain.hparams, "smoothing") and whisper_asr_brain.hparams.smoothing:
         wavs = whisper_asr_brain.hparams.smoothing(wavs, wav_lens)          # 随机平滑
 
-    if hasattr(whisper_asr_brain.modules, "env_corrupt"):
+    # 攻击阶段是否开启 env_corrupt 由 hparams.attack_use_env_corrupt 控制，默认关闭以节省显存
+    use_env_corrupt = getattr(whisper_asr_brain.hparams, "attack_use_env_corrupt", False)
+    if use_env_corrupt and hasattr(whisper_asr_brain.modules, "env_corrupt"):
         wavs_noise = whisper_asr_brain.modules.env_corrupt(wavs, wav_lens)   # 加噪增强
         wavs = torch.cat([wavs, wavs_noise], dim=0)                         # 拼接干净+噪声
         wav_lens = torch.cat([wav_lens, wav_lens])                          # 对应长度
         tokens_bos = torch.cat([tokens_bos, tokens_bos], dim=0)             # 对齐 BOS
 
-    if hasattr(whisper_asr_brain.hparams, "augmentation"):
+    # 同理，攻击阶段的其他增广也可通过 attack_use_augmentation 控制（默认关闭）
+    use_aug = getattr(whisper_asr_brain.hparams, "attack_use_augmentation", False)
+    if use_aug and hasattr(whisper_asr_brain.hparams, "augmentation"):
         wavs = whisper_asr_brain.hparams.augmentation(wavs, wav_lens)       # 其他增广
 
     # Forward pass
