@@ -23,7 +23,7 @@ def compute_forward_lang(whisper_asr_brain, batch, stage):
         wavs_noise = whisper_asr_brain.modules.env_corrupt(wavs, wav_lens)   # 加噪增强
         wavs = torch.cat([wavs, wavs_noise], dim=0)                         # 拼接干净+噪声
         wav_lens = torch.cat([wav_lens, wav_lens])                          # 对应长度
-        tokens_bos = torch.cat([tokens_bos, tokens_bos], dim=0)             # 对齐 BOS
+        # 注意：tokens_bos 在本函数中不使用，因此不需要拼接以避免批次字段不一致
 
     # 同理，攻击阶段的其他增广也可通过 attack_use_augmentation 控制（默认关闭）
     use_aug = getattr(whisper_asr_brain.hparams, "attack_use_augmentation", False)
