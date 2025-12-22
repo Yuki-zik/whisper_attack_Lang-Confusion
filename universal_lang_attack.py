@@ -10,6 +10,7 @@ import torch
 from robust_speech.adversarial.utils import TargetGenerator
 import copy
 from robust_speech.adversarial.attacks.attacker import TrainableAttacker
+from collections import Counter
 from lang_attack import WhisperLangID
 from robust_speech.adversarial.utils import (
     l2_clamp_or_normalize,
@@ -521,6 +522,9 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 total_sample = 0.0
                 fooled_sample = 0.0
                 eval_loss_sum = 0.0
+                lang_eval_total = 0.0
+                lang_changed = 0.0
+                lang_transition_counter = Counter()
 
                 # 目标 token 的“标量形式”（如果你的 lang_token 不是单 token，这里至少不会直接崩）
                 target_tok = self.lang_token
@@ -546,10 +550,19 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                             delta_x[:delta.shape[0]] = delta
 
                         delta_batch = delta_x.unsqueeze(0).expand(wav_init.size()).to(self.asr_brain.device)
-                        batch.sig = wav_init + delta_batch, wav_lens
 
-                        # 获取预测结果
-                        predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
+                        # clean 预测（便于统计“语种是否被扰动改变”）
+                        batch.sig = wav_init, wav_lens
+                        clean_predictions = self.asr_brain.compute_forward(
+                            batch, rs.Stage.ATTACK
+                        )
+                        clean_lang_tokens, _, _ = clean_predictions
+
+                        # 叠加扰动后的预测
+                        batch.sig = wav_init + delta_batch, wav_lens
+                        predictions = self.asr_brain.compute_forward(
+                            batch, rs.Stage.ATTACK
+                        )
 
                         # 你原来假设 predictions 返回 (token, ..., ...)
                         language_tokens_pred, _, _ = predictions
@@ -561,6 +574,22 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                         if torch.is_tensor(language_tokens_pred):
                             # 常见情况：language_tokens_pred shape = (B,) 或 (B,1)
                             pred_flat = language_tokens_pred.view(-1)
+
+                            # 统计语种变化比例
+                            if torch.is_tensor(clean_lang_tokens):
+                                clean_flat = clean_lang_tokens.view(-1)
+                                pair_len = min(clean_flat.numel(), pred_flat.numel())
+                                clean_flat = clean_flat[:pair_len]
+                                pred_flat = pred_flat[:pair_len]
+                                diff_mask = clean_flat != pred_flat
+                                lang_changed += float(diff_mask.sum().item())
+                                lang_eval_total += float(pair_len)
+
+                                # 记录语种迁移（原语种→对抗后语种）分布
+                                for c_tok, a_tok in zip(
+                                    clean_flat[diff_mask], pred_flat[diff_mask]
+                                ):
+                                    lang_transition_counter[(int(c_tok), int(a_tok))] += 1
 
                             # 如果 target_tok 不是单 token，严格相等可能维度对不上，这里至少保证不崩
                             if torch.is_tensor(target_tok_scalar):
@@ -589,9 +618,20 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
 
                 success_rate = fooled_sample / total_sample if total_sample > 0 else 0.0
                 mean_eval_loss = eval_loss_sum / (idx_eval + 1) if (idx_eval + 1) > 0 else float("nan")
+                lang_change_rate = lang_changed / lang_eval_total if lang_eval_total > 0 else 0.0
 
                 print(f'SUCCESS RATE IS {success_rate:.4f}')
                 print(f'LOSS IS {mean_eval_loss:.4f}')
+                print(f'LANGUAGE CHANGE RATE IS {lang_change_rate:.4f} (changed {lang_changed:.0f}/{lang_eval_total:.0f})')
+
+                if lang_transition_counter:
+                    top_trans = lang_transition_counter.most_common(5)
+                    decoded_trans = []
+                    for (src_tok, tgt_tok), cnt in top_trans:
+                        decoded_trans.append(
+                            f"{self._decode_lang_token(src_tok)} -> {self._decode_lang_token(tgt_tok)}: {cnt}"
+                        )
+                    print(f'[lang-shift top5] {decoded_trans}')
 
                 # 新增：记录 eval 历史
                 self.eval_history.append({
@@ -601,6 +641,9 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     "fooled": float(fooled_sample),
                     "total": float(total_sample),
                     "delta_linf": float(delta.abs().max().item()),
+                    "lang_change_rate": float(lang_change_rate),
+                    "lang_changed": float(lang_changed),
+                    "lang_eval_total": float(lang_eval_total),
                 })
 
                 # 保存最佳扰动
