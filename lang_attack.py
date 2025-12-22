@@ -36,11 +36,13 @@ def compute_forward_lang(whisper_asr_brain, batch, stage):
     all_lang_probs = []
     all_logits = []
 
+    use_autocast = getattr(whisper_asr_brain.hparams, "lang_autocast", True)
+
     for audio in wavs:
         mel = log_mel_spectrogram(audio)                                  # 生成 mel
         mel = pad_or_trim(mel, N_FRAMES)                                  # 固定长度
         lang_tok, lang_prob, lang_logits = detect_language_with_gradients(
-            whisper_asr_brain.modules.whisper.model, mel
+            whisper_asr_brain.modules.whisper.model, mel, use_autocast=use_autocast
         )
         all_lang_tokens.append(lang_tok.squeeze())                        # (1,) -> 标量
         # detect_language_with_gradients 可能返回字典形式的概率，这里统一使用 logits
