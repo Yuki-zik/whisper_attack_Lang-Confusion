@@ -111,6 +111,8 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         self.log_lang_pred_samples = log_lang_pred_samples
         self.show_pgd_pbar = show_pgd_pbar
         self.ema_alpha = ema_alpha
+        # 语言识别前向的分块大小；大 batch + 多步 PGD 时可按此切分 micro-batch 逐块反传，降低显存峰值
+        self.lang_microbatch_size = getattr(asr_brain.hparams, "lang_microbatch_size", None)
 
         # 尝试记录数据集的“源语言”标注，便于日志对照；不存在则留空
         src_lang = getattr(asr_brain.hparams, "lang_CV", None)
@@ -333,34 +335,72 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                     r_batch = r.unsqueeze(0).expand(delta_batch.size())
 
                     # 前向传播：输入 = 原始语音 + 通用扰动 + 当前微调量 r
-                    batch.sig = wav_init + delta_batch + r_batch, wav_lens
+                    # 为避免一次性在大 batch 上构图撑爆显存，这里支持按 micro-batch 分块反传。
+                    # 注意：lang_microbatch_size 仅影响显存占用，不会改变梯度期望，因为每块 loss
+                    # 会按样本占比归一化后再累积。
+                    total_batch = wav_init.size(0)
+                    micro_bs = self.lang_microbatch_size or total_batch
+                    micro_bs = max(1, micro_bs)
 
-                    # 获取模型预测
-                    predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
+                    # 备份原始字段，便于循环内临时切片后恢复
+                    orig_sig = batch.sig
+                    orig_tokens = batch.tokens
+                    orig_tokens_bos = batch.tokens_bos
 
-                    # 计算 Loss：目标是让预测结果接近目标语言 token
-                    # reduction="mean" 保证得到标量 loss，避免反向传播时报 "grad can be implicitly created only for scalar outputs"
-                    lang_loss = self.asr_brain.compute_objectives(
-                        predictions, batch, rs.Stage.ATTACK, reduction="mean"
-                    )
+                    lang_loss_list = []
+
+                    for start in range(0, total_batch, micro_bs):
+                        end = min(total_batch, start + micro_bs)
+                        # 切片后的扰动语音
+                        batch.sig = (
+                            (wav_init + delta_batch + r_batch)[start:end],
+                            wav_lens[start:end],
+                        )
+                        # 对齐文本/长度（尽管 compute_forward_lang 当前未使用 tokens，但保持完整 batch 信息）
+                        batch.tokens = (
+                            orig_tokens[0][start:end],
+                            orig_tokens[1][start:end],
+                        )
+                        batch.tokens_bos = (
+                            orig_tokens_bos[0][start:end],
+                            orig_tokens_bos[1][start:end],
+                        )
+
+                        # 获取模型预测
+                        predictions = self.asr_brain.compute_forward(
+                            batch, rs.Stage.ATTACK
+                        )
+
+                        # 计算 Loss：目标是让预测结果接近目标语言 token
+                        chunk_loss = self.asr_brain.compute_objectives(
+                            predictions, batch, rs.Stage.ATTACK, reduction="mean"
+                        )
+
+                        # 为保持整体等价性，按样本占比缩放再累积梯度
+                        chunk_scale = (end - start) / total_batch
+                        (chunk_loss * chunk_scale).backward()
+                        lang_loss_list.append(chunk_loss.detach())
+
+                    # 恢复原始 batch 字段，避免影响后续逻辑
+                    batch.sig = orig_sig
+                    batch.tokens = orig_tokens
+                    batch.tokens_bos = orig_tokens_bos
 
                     # 辅助 Loss：L2 正则化，希望 r 越小越好（微调量不要太大）
                     l2_norm = r.norm(p=2).to(self.asr_brain.device)
+                    (0.5 * l2_norm).backward()
 
-                    # 总 Loss
+                    # 汇总日志用的标量（梯度已在上面分块累积完毕）
+                    lang_loss = torch.stack(lang_loss_list).mean()
                     loss = 0.5 * l2_norm + lang_loss
 
                     # 提前停止条件：如果 Loss 已经很小，说明攻击成功，跳出循环
-                    # 注意：lang_loss 可能是向量，这里沿用你原逻辑用 max()
                     if torch.is_tensor(lang_loss):
                         if lang_loss.max() < 0.1:
                             break
                     else:
                         if float(lang_loss) < 0.1:
                             break
-
-
-                    loss.backward()  # 反向传播计算梯度
 
                     # --- 4. 梯度更新 (PGD 核心公式) ---
                     grad_sign = r.grad.data.sign()  # 取梯度符号（L_inf 攻击特征）
