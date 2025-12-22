@@ -48,7 +48,7 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         targeted_for_language=True,
         nb_epochs=10,
         eps_item=0.001,
-        success_every=10,
+        success_every=20,
         univ_perturb=None,
         epoch_counter=None,
         # ======== 新增：日志/进度条相关配置（不影响攻击逻辑）========

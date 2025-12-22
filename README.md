@@ -140,11 +140,11 @@ python inference.py --model whisper-medium.en --config untargeted-35
     --csv_folder=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
     --train_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/fit.csv \
     --test_csv=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/test-clean.csv \
-    --lang_attack=fr --lang_CV=en \
+    --lang_attack=zh --lang_CV=en \
     --model_label=small \
     --load_audio=False \
-    --batch_size=32 --nb_iter=10 --eps=0.02 --eps_item=0.01 \
-    --rel_eps_iter=0.1 --epochs=5000 --success_every=100 --seed=1101
+    --batch_size=16 --nb_iter=10 --eps=0.01 --eps_item=0.005 \
+    --rel_eps_iter=0.1 --epochs=5000 --success_every=30 --seed=1101 --lang_microbatch_size=4
 
   python fit_attacker.py attack_configs/whisper/univ_lang_fit.yaml \
     --lang_CV=it --lang_attack=sr --model_label=medium \

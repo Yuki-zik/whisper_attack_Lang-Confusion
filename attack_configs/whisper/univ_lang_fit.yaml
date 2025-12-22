@@ -60,6 +60,9 @@ save_audio_path: !ref <output_folder>/save
 params_subfolder: params
 params_folder: !ref <output_folder>/<params_subfolder>
 
+lang_microbatch_size: 2
+
+
 dataset_prepare_fct: !name:robust_speech.data.common_voice.prepare_common_voice
   language: !ref <lang_CV>
   accented_letters: true
