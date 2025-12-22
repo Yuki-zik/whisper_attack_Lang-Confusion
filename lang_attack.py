@@ -32,32 +32,24 @@ def compute_forward_lang(whisper_asr_brain, batch, stage):
     # 并在 batch 维度上堆叠返回，保证评估和成功率统计按真实样本数对齐。
     tokens, _ = batch.tokens                                               # 文本标签（未用，仅保持接口）
 
-    all_lang_tokens = []
-    all_lang_probs = []
-    all_logits = []
-
     use_autocast = getattr(whisper_asr_brain.hparams, "lang_autocast", True)
 
+    # 逐条 mel 计算后一次性堆叠，避免在 Python for-loop 中重复构建/保留多份完整 encoder 计算图
+    mels = []
     for audio in wavs:
         mel = log_mel_spectrogram(audio)                                  # 生成 mel
         mel = pad_or_trim(mel, N_FRAMES)                                  # 固定长度
-        lang_tok, lang_prob, lang_logits = detect_language_with_gradients(
-            whisper_asr_brain.modules.whisper.model, mel, use_autocast=use_autocast
-        )
-        all_lang_tokens.append(lang_tok.squeeze())                        # (1,) -> 标量
-        # detect_language_with_gradients 可能返回字典形式的概率，这里统一使用 logits
-        # 概率仅用于日志或外部分析，不参与梯度，因此直接 detach+cpu 以减少显存占用
-        all_lang_probs.append(
-            torch.softmax(lang_logits.detach(), dim=-1)
-            .squeeze()
-            .cpu()
-        )
-        all_logits.append(lang_logits.squeeze())                          # (1, num_lang)
+        mels.append(mel)
 
-    language_tokens = torch.stack(all_lang_tokens).to(whisper_asr_brain.device)
-    # 概率仅用于日志/分析，不参与反向传播，保持在 CPU 以避免额外显存占用
-    language_probs = torch.stack(all_lang_probs)
-    logits = torch.stack(all_logits).to(whisper_asr_brain.device)
+    mel_batch = torch.stack(mels)                                         # (batch, n_mels, frames)
+    language_tokens, _, logits = detect_language_with_gradients(
+        whisper_asr_brain.modules.whisper.model, mel_batch, use_autocast=use_autocast
+    )
+
+    # detect_language_with_gradients 返回的 logits 需要保留梯度；概率用于日志则 detach+cpu 减少显存
+    language_probs = torch.softmax(logits.detach(), dim=-1).cpu()
+    language_tokens = language_tokens.to(whisper_asr_brain.device)
+    logits = logits.to(whisper_asr_brain.device)
 
     return language_tokens, language_probs, logits
 

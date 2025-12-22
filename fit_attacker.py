@@ -274,6 +274,14 @@ def fit(hparams_file, run_opts, overrides):
             target=target,
         )
 
+        attacker = getattr(target_brain, "attacker", None)
+        if hasattr(attacker, "log_test_language_shift"):
+            attacker.log_test_language_shift(
+                test_datasets[k],
+                dataloader_opts=hparams["test_dataloader_opts"],
+                split_name=k,
+            )
+
 
 if __name__ == "__main__":
 
