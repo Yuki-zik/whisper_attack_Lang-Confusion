@@ -10,6 +10,7 @@ import torch
 from robust_speech.adversarial.utils import TargetGenerator
 import copy
 from robust_speech.adversarial.attacks.attacker import TrainableAttacker
+from collections import Counter
 from lang_attack import WhisperLangID
 from robust_speech.adversarial.utils import (
     l2_clamp_or_normalize,
@@ -244,6 +245,148 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
                 f"clean(前{len(clean_pred_texts)}条)={clean_pred_texts} "
                 f"adv(前{len(adv_pred_texts)}条)={adv_pred_texts}"
             )
+
+    def _summarize_language_shift(self, loader, delta, desc="test"):
+        """
+        统一的评估逻辑：在给定数据集上统计成功率、loss 以及语种变化比例。
+        训练阶段（success_every）和测试阶段都复用该函数，避免重复代码。
+        """
+        print(f"[lang-eval] 开始在 {desc} 数据集统计语种变化和成功率")
+        total_sample = 0.0
+        fooled_sample = 0.0
+        eval_loss_sum = 0.0
+        lang_eval_total = 0.0
+        lang_changed = 0.0
+        lang_transition_counter = Counter()
+
+        target_tok = self.lang_token
+        if torch.is_tensor(target_tok) and target_tok.numel() >= 1:
+            target_tok_scalar = target_tok.view(-1)[0]
+        else:
+            target_tok_scalar = target_tok
+
+        with torch.no_grad():
+            eval_iter = tqdm(
+                loader, dynamic_ncols=True, desc=f"Eval ({desc})", leave=False
+            )
+            for idx_eval, batch in enumerate(eval_iter):
+                batch = batch.to(self.asr_brain.device)
+                wav_init, wav_lens = batch.sig
+
+                delta_x = torch.zeros_like(wav_init[0])
+                if wav_init.shape[1] <= delta.shape[0]:
+                    begin = torch.randint(delta.shape[0] - wav_init.shape[1] - 1, size=(1,))
+                    delta_x = delta[begin: begin + wav_init.shape[1]]
+                else:
+                    delta_x[:delta.shape[0]] = delta
+
+                delta_batch = delta_x.unsqueeze(0).expand(wav_init.size()).to(
+                    self.asr_brain.device
+                )
+
+                batch.sig = wav_init, wav_lens
+                clean_predictions = self.asr_brain.compute_forward(
+                    batch, rs.Stage.ATTACK
+                )
+                clean_lang_tokens, _, _ = clean_predictions
+
+                batch.sig = wav_init + delta_batch, wav_lens
+                predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
+                language_tokens_pred, _, _ = predictions
+
+                total_sample += float(batch.batchsize)
+
+                if torch.is_tensor(language_tokens_pred):
+                    pred_flat = language_tokens_pred.view(-1)
+
+                    if torch.is_tensor(clean_lang_tokens):
+                        clean_flat = clean_lang_tokens.view(-1)
+                        pair_len = min(clean_flat.numel(), pred_flat.numel())
+                        clean_flat = clean_flat[:pair_len]
+                        pred_flat = pred_flat[:pair_len]
+                        diff_mask = clean_flat != pred_flat
+                        lang_changed += float(diff_mask.sum().item())
+                        lang_eval_total += float(pair_len)
+
+                        for c_tok, a_tok in zip(
+                            clean_flat[diff_mask], pred_flat[diff_mask]
+                        ):
+                            lang_transition_counter[(int(c_tok), int(a_tok))] += 1
+
+                    if torch.is_tensor(target_tok_scalar):
+                        cmp = pred_flat == target_tok_scalar
+                    else:
+                        cmp = pred_flat == torch.tensor(
+                            target_tok_scalar, device=pred_flat.device
+                        )
+
+                    fooled_sample += float(cmp.sum().item())
+                else:
+                    if not self._warned_lang_shape:
+                        print(
+                            "[warn] language_tokens_pred is not a tensor; success stats may be unreliable."
+                        )
+                        self._warned_lang_shape = True
+
+                ll = self.asr_brain.compute_objectives(
+                    predictions, batch, rs.Stage.ATTACK
+                )
+                eval_loss_sum += self._safe_scalar(ll, reduce="mean")
+
+                cur_sr = (fooled_sample / total_sample) if total_sample > 0 else 0.0
+                cur_loss = eval_loss_sum / (idx_eval + 1)
+                eval_iter.set_postfix({"sr": f"{cur_sr:.3f}", "loss": f"{cur_loss:.4f}"})
+
+        success_rate = fooled_sample / total_sample if total_sample > 0 else 0.0
+        mean_eval_loss = (
+            eval_loss_sum / (idx_eval + 1) if (idx_eval + 1) > 0 else float("nan")
+        )
+        lang_change_rate = (
+            lang_changed / lang_eval_total if lang_eval_total > 0 else 0.0
+        )
+
+        print(f'SUCCESS RATE IS {success_rate:.4f}')
+        print(f'LOSS IS {mean_eval_loss:.4f}')
+        print(
+            f'LANGUAGE CHANGE RATE IS {lang_change_rate:.4f} (changed {lang_changed:.0f}/{lang_eval_total:.0f})'
+        )
+
+        if lang_transition_counter:
+            top_trans = lang_transition_counter.most_common(5)
+            decoded_trans = []
+            for (src_tok, tgt_tok), cnt in top_trans:
+                decoded_trans.append(
+                    f"{self._decode_lang_token(src_tok)} -> {self._decode_lang_token(tgt_tok)}: {cnt}"
+                )
+            print(f'[lang-shift top5] {decoded_trans}')
+
+        return {
+            "success_rate": success_rate,
+            "mean_loss": mean_eval_loss,
+            "fooled": fooled_sample,
+            "total": total_sample,
+            "lang_change_rate": lang_change_rate,
+            "lang_changed": lang_changed,
+            "lang_eval_total": lang_eval_total,
+        }
+
+    def log_test_language_shift(self, dataset, dataloader_opts=None, split_name="TEST"):
+        """
+        在测试集上额外打印语种变化与成功率。
+        仅用于攻击训练结束后的 eval，避免用户在 test 日志中看不到语种信息。
+        """
+        if dataloader_opts is None:
+            dataloader_opts = {}
+
+        # WhisperLangID 不含 checkpointer，需取底层 WhisperASR 构造 DataLoader
+        base_brain = getattr(self.asr_brain, "asr_brain", self.asr_brain)
+
+        loader = base_brain.make_dataloader(
+            dataset, stage=rs.Stage.ATTACK, **dataloader_opts
+        )
+        delta = self.univ_perturb.tensor.data.to(base_brain.device)
+        base_brain.module_eval()
+        self._summarize_language_shift(loader, delta, desc=split_name)
 
     def _compute_universal_perturbation(self, loader):
         """
@@ -517,95 +660,26 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
 
             # --- 评估阶段：每隔 success_every 轮检查一次成功率 ---
             if (epoch % self.success_every) == 0:
-                print(f'Check success rate after epoch {epoch}')
-                total_sample = 0.0
-                fooled_sample = 0.0
-                eval_loss_sum = 0.0
-
-                # 目标 token 的“标量形式”（如果你的 lang_token 不是单 token，这里至少不会直接崩）
-                target_tok = self.lang_token
-                if torch.is_tensor(target_tok) and target_tok.numel() >= 1:
-                    target_tok_scalar = target_tok.view(-1)[0]
-                else:
-                    target_tok_scalar = target_tok
-
-                # 验证阶段无需反向传播，显式 no_grad 可大幅降低显存占用
-                with torch.no_grad():
-                    # 遍历整个 loader 进行验证
-                    eval_iter = tqdm(loader, dynamic_ncols=True, desc=f"Eval (epoch={epoch})", leave=False)
-                    for idx_eval, batch in enumerate(eval_iter):
-                        batch = batch.to(self.asr_brain.device)
-                        wav_init, wav_lens = batch.sig
-
-                        # 再次构造扰动并叠加（不求导，只推理）
-                        delta_x = torch.zeros_like(wav_init[0])
-                        if wav_init.shape[1] <= delta.shape[0]:
-                            begin = torch.randint(delta.shape[0] - wav_init.shape[1] - 1, size=(1,))
-                            delta_x = delta[begin: begin + wav_init.shape[1]]
-                        else:
-                            delta_x[:delta.shape[0]] = delta
-
-                        delta_batch = delta_x.unsqueeze(0).expand(wav_init.size()).to(self.asr_brain.device)
-                        batch.sig = wav_init + delta_batch, wav_lens
-
-                        # 获取预测结果
-                        predictions = self.asr_brain.compute_forward(batch, rs.Stage.ATTACK)
-
-                        # 你原来假设 predictions 返回 (token, ..., ...)
-                        language_tokens_pred, _, _ = predictions
-
-                        # 统计：如果预测 token 等于目标 lang_token，则视为“被愚弄成功”
-                        # 这里做一个尽量宽容的处理：优先按“每个样本一个 token”的情况统计
-                        total_sample += float(batch.batchsize)
-
-                        if torch.is_tensor(language_tokens_pred):
-                            # 常见情况：language_tokens_pred shape = (B,) 或 (B,1)
-                            pred_flat = language_tokens_pred.view(-1)
-
-                            # 如果 target_tok 不是单 token，严格相等可能维度对不上，这里至少保证不崩
-                            if torch.is_tensor(target_tok_scalar):
-                                cmp = (pred_flat == target_tok_scalar)
-                            else:
-                                cmp = (pred_flat == torch.tensor(target_tok_scalar, device=pred_flat.device))
-
-                            fooled_sample += float(cmp.sum().item())
-                        else:
-                            # 极端情况：predictions 不是 tensor
-                            if not self._warned_lang_shape:
-                                print("[warn] language_tokens_pred is not a tensor; success stats may be unreliable.")
-                                self._warned_lang_shape = True
-
-                        # loss 统计
-                        ll = self.asr_brain.compute_objectives(predictions, batch, rs.Stage.ATTACK)
-                        eval_loss_sum += self._safe_scalar(ll, reduce="mean")
-
-                        # 更新 eval 进度条
-                        cur_sr = (fooled_sample / total_sample) if total_sample > 0 else 0.0
-                        cur_loss = eval_loss_sum / (idx_eval + 1)
-                        eval_iter.set_postfix({
-                            "sr": f"{cur_sr:.3f}",
-                            "loss": f"{cur_loss:.4f}",
-                        })
-
-                success_rate = fooled_sample / total_sample if total_sample > 0 else 0.0
-                mean_eval_loss = eval_loss_sum / (idx_eval + 1) if (idx_eval + 1) > 0 else float("nan")
-
-                print(f'SUCCESS RATE IS {success_rate:.4f}')
-                print(f'LOSS IS {mean_eval_loss:.4f}')
+                eval_result = self._summarize_language_shift(
+                    loader, delta, desc=f"epoch={epoch}"
+                )
 
                 # 新增：记录 eval 历史
                 self.eval_history.append({
                     "epoch": int(epoch),
-                    "success_rate": float(success_rate),
-                    "mean_loss": float(mean_eval_loss),
-                    "fooled": float(fooled_sample),
-                    "total": float(total_sample),
+                    "success_rate": float(eval_result["success_rate"]),
+                    "mean_loss": float(eval_result["mean_loss"]),
+                    "fooled": float(eval_result["fooled"]),
+                    "total": float(eval_result["total"]),
                     "delta_linf": float(delta.abs().max().item()),
+                    "lang_change_rate": float(eval_result["lang_change_rate"]),
+                    "lang_changed": float(eval_result["lang_changed"]),
+                    "lang_eval_total": float(eval_result["lang_eval_total"]),
                 })
 
                 # 保存最佳扰动
-                if success_rate > best_success_rate:
-                    best_success_rate = success_rate
+                if eval_result["success_rate"] > best_success_rate:
+                    best_success_rate = eval_result["success_rate"]
                     self.univ_perturb.tensor.data = delta.detach()
                     self.checkpointer.save_and_keep_only()  # 保存 checkpoint
 
