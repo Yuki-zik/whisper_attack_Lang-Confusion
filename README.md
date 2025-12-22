@@ -91,9 +91,9 @@
 - 评估通用扰动（使用上一步生成的扰动，切换不同源语种）：
   ```bash
   python run_attack.py attack_configs/whisper/univ_lang.yaml \
-    --lang_CV=en --lang_attack=sr --model_label=medium --data_csv_name=test-90 \
-    --root=$RSROOT --load_audio=True --seed=1101 --nb_iter=1 --eps=0.005 \
-    --params_subfolder=CKPT+2023-03-05+06-00-05+00
+    --lang_CV=en --lang_attack=zh --model_label=small --data_csv_name=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv/test-clean.csv \
+    --root=/root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/ --load_audio=False --seed=1101 --nb_iter=1 --eps=0.01 \
+    --params_subfolder=CKPT+2025-12-22+19-01-59+00
   ```
 - 如需批量评估多语种，可参考 `lang.sh` 末尾的多行 `run_attack.py` 示例，修改 `--lang_CV` 以切换源语种；`--lang_attack` 控制目标语言。
 
@@ -143,8 +143,8 @@ python inference.py --model whisper-medium.en --config untargeted-35
     --lang_attack=zh --lang_CV=en \
     --model_label=small \
     --load_audio=False \
-    --batch_size=16 --nb_iter=10 --eps=0.01 --eps_item=0.005 \
-    --rel_eps_iter=0.1 --epochs=5000 --success_every=30 --seed=1101 --lang_microbatch_size=4
+    --batch_size=4 --nb_iter=10 --eps=0.01 --eps_item=0.005 \
+    --rel_eps_iter=0.1 --epochs=50 --success_every=30 --seed=1101 --lang_microbatch_size=4
 
   python fit_attacker.py attack_configs/whisper/univ_lang_fit.yaml \
     --lang_CV=it --lang_attack=sr --model_label=medium \
