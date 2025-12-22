@@ -378,9 +378,14 @@ class UniversalWhisperLanguageAttack(TrainableAttacker, ASRLinfPGDAttack):
         if dataloader_opts is None:
             dataloader_opts = {}
 
-        loader = self.asr_brain.make_dataloader(dataset, stage=rs.Stage.ATTACK, **dataloader_opts)
-        delta = self.univ_perturb.tensor.data.to(self.asr_brain.device)
-        self.asr_brain.module_eval()
+        # WhisperLangID 不含 checkpointer，需取底层 WhisperASR 构造 DataLoader
+        base_brain = getattr(self.asr_brain, "asr_brain", self.asr_brain)
+
+        loader = base_brain.make_dataloader(
+            dataset, stage=rs.Stage.ATTACK, **dataloader_opts
+        )
+        delta = self.univ_perturb.tensor.data.to(base_brain.device)
+        base_brain.module_eval()
         self._summarize_language_shift(loader, delta, desc=split_name)
 
     def _compute_universal_perturbation(self, loader):
