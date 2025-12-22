@@ -26,7 +26,7 @@
         --role testclean \
         --lang en --compute-duration \
         --seed 42 \
-        --num-samples 50
+        --num-samples 200
 """
 
 import argparse

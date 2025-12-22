@@ -4,7 +4,7 @@
 
 用法示例：
 python export_delta.py \
-    --checkpoint /path/to/attacks/univ_lang/es/whisper-tiny/1002/params/delta.ckpt \
+    --checkpoint /root/autodl-tmp/whisper_attack_Lang-Confusion/attacks/univ_lang/zh/whisper-small/1101/CKPT+2025-12-22+18-30-01+00/delta.ckpt \
     --output-dir ./exported
     # 若未指定 --name，会自动根据路径生成形如 delta_univ_lang_es_whisper-tiny_1002.npy 的文件名。
 """
