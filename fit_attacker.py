@@ -115,8 +115,6 @@ def fit(hparams_file, run_opts, overrides):
         hparams["test_csv"] = [hparams["test_csv"]]
     if isinstance(hparams.get("test_splits"), str):
         hparams["test_splits"] = [hparams["test_splits"]]
-    if isinstance(hparams.get("test_csv"), str):
-        hparams["test_csv"] = [hparams["test_csv"]]
     if "tokenizer_builder" in hparams:
         tokenizer = hparams["tokenizer_builder"](hparams["tokenizer_name"])
         hparams["tokenizer"] = tokenizer

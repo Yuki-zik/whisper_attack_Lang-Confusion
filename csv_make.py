@@ -8,18 +8,25 @@
 
 使用示例：
     # 生成训练用 fit.csv
-    python tools/generate_librispeech_csv.py \
-        --split-path /root/.../LibriSpeech/train-clean-100 \
-        --output-dir /root/.../LibriSpeech/csv \
+    python csv_make.py \
+        --split-path /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/test-clean \
+        --output-dir /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
         --role fit \
-        --lang en --compute-duration
+        --lang en --compute-duration \
+        --seed 42 \
+        --num-samples 73
+
+
+
 
     # 生成评估用 test-clean.csv
-    python tools/generate_librispeech_csv.py \
-        --split-path /root/.../LibriSpeech/test-clean \
-        --output-dir /root/.../LibriSpeech/csv \
+    python csv_make.py \
+        --split-path /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/test-clean \
+        --output-dir /root/autodl-tmp/prepend_acoustic_attack/data/librispeech/LibriSpeech/csv \
         --role testclean \
-        --lang en --compute-duration
+        --lang en --compute-duration \
+        --seed 42 \
+        --num-samples 50
 """
 
 import argparse
