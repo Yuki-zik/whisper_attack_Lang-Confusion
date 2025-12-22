@@ -53,7 +53,8 @@ def compute_forward_lang(whisper_asr_brain, batch, stage):
         all_logits.append(lang_logits.squeeze())                          # (1, num_lang)
 
     language_tokens = torch.stack(all_lang_tokens).to(whisper_asr_brain.device)
-    language_probs = torch.stack(all_lang_probs).to(whisper_asr_brain.device)
+    # 概率仅用于日志/分析，不参与反向传播，保持在 CPU 以避免额外显存占用
+    language_probs = torch.stack(all_lang_probs)
     logits = torch.stack(all_logits).to(whisper_asr_brain.device)
 
     return language_tokens, language_probs, logits
