@@ -8,7 +8,12 @@ from whisper.tokenizer import Tokenizer, get_tokenizer             # tokenizer
 from typing import Tuple
 import numpy as np                                                 # 数值
 
-def detect_language_with_gradients(model: "Whisper", mel: torch.Tensor, tokenizer: Tokenizer = None) -> Tuple[torch.Tensor, List[dict]]:
+def detect_language_with_gradients(
+    model: "Whisper",
+    mel: torch.Tensor,
+    tokenizer: Tokenizer = None,
+    use_autocast: bool = True,
+) -> Tuple[torch.Tensor, List[dict]]:
     """
     Detect the spoken language in the audio, and return them as list of strings, along with the ids
     of the most probable language tokens and the probability distribution over all language tokens.
@@ -30,14 +35,21 @@ def detect_language_with_gradients(model: "Whisper", mel: torch.Tensor, tokenize
     if single:
         mel = mel.unsqueeze(0)
 
-    # skip encoder forward pass if already-encoded audio features were given
-    if mel.shape[-2:] != (model.dims.n_audio_ctx, model.dims.n_audio_state):
-        mel = model.encoder(mel)
+    # 为降低显存占用，对 GPU 前向启用 autocast（混合精度）。
+    # CPU 或显式关闭时直接用全精度。
+    autocast_on = use_autocast and mel.device.type == "cuda"
+    with torch.cuda.amp.autocast(enabled=autocast_on):
+        # skip encoder forward pass if already-encoded audio features were given
+        if mel.shape[-2:] != (model.dims.n_audio_ctx, model.dims.n_audio_state):
+            mel = model.encoder(mel)
 
-    # forward pass using a single token, startoftranscript
-    n_audio = mel.shape[0]
-    x = torch.tensor([[tokenizer.sot]] * n_audio).to(mel.device)  # [n_audio, 1]
-    logits = model.logits(x, mel)[:, 0]
+        # forward pass using a single token, startoftranscript
+        n_audio = mel.shape[0]
+        x = torch.tensor([[tokenizer.sot]] * n_audio).to(mel.device)  # [n_audio, 1]
+        logits = model.logits(x, mel)[:, 0]
+
+    # 计算语言概率与 token 时回到 float32，避免后续损失过度受混合精度影响
+    logits = logits.float()
 
     # collect detected languages; suppress all non-language tokens
     mask = torch.ones(logits.shape[-1], dtype=torch.bool)
